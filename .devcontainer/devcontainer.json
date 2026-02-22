@@ -1,0 +1,18 @@
+{
+	"name": "PredictiveCodingRust",
+	"image": "mcr.microsoft.com/devcontainers/rust:latest",
+	"remoteUser": "root",
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"rust-lang.rust-analyzer",
+				"vadimcn.vscode-lldb",
+				"dustypomerleau.rust-syntax",
+				"JScearcy.rust-doc-viewer",
+				"ZhangYue.rust-mod-generator",
+				"mooman219.rust-assist",
+				"jinxdash.prettier-rust"
+			]
+		}
+	}
+}
