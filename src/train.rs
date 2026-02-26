@@ -2,7 +2,7 @@ mod training_data_handler;
 mod model;
 mod model_utils;
 
-use tracing::{info, Level};
+use tracing::{Level, info, debug};
 
 
 fn main() {
@@ -34,15 +34,50 @@ fn main() {
     &layer_sizes,
     gamma,
     alpha,
-    model_utils::ReLU
+    model_utils::relu
   );
+
   // When setting the input, normalise the pixel values to 0..1
-  model.set_input(data.images[rand_index].iter().map(|&x| x as f32 / 255.0).collect());
+  let input_row = data.images.row(rand_index).mapv(|x| x as f32 / 255.0).to_owned();
+  model.set_input(input_row);
 
   model.compute_errors();
-  let model_error = model.compute_total_error();
+  let model_error = model.read_total_error();
   info!(
     "Initial error of the model is {}",
+    model_error
+  );
+
+  let training_steps: u32 = 5;
+  let convergence_steps: u32 = 3;
+  let convergence_threshold: f32 = 0.01;
+
+  for step in 0..training_steps {
+    info!("Training step {}", step);
+
+    let mut converged: bool = false;
+    let mut convergence_count: u32 = 0;
+
+    while !converged && convergence_count < convergence_steps {
+      debug!("Timestep {}", convergence_count);
+      let value_change = model.timestep();
+      debug!("Value change: {}", value_change);
+
+      if value_change.abs() < convergence_threshold {
+        info!("Model converged after {} timesteps", convergence_count);
+        converged = true;
+      }
+      convergence_count += 1;
+    };
+
+    model.update_weights();
+    model.compute_predictions();
+    model.compute_errors();
+  }
+
+  let model_error = model.read_total_error();
+  info!(
+    "Final error of the model is {}",
     model_error
   );
 }
