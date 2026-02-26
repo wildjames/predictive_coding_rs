@@ -13,6 +13,7 @@ $$
 $$
 \bf{e}^l_{i,t} = \bf{x}^l_{i,t} - \bf{u}^l_{i,t}
 $$
+- The weights for this layer, $\bf{W}^l$
 
 These are not stored as individual objects, but rather as a series of arrays. Each layer will have an array of node values, weights, and errors. It will also have some activation function $\phi$ which relates it to layer $(l+1)$.
 
@@ -23,11 +24,15 @@ There are two stages, first the values are found, then the model weights are adj
 ## Value convergence
 
 - For $0 \lt l \lt L$, i.e. the main body of the nodes,
+
 $$
 \Delta \bf{x}^l_t = \gamma \cdot (-\bf{e}^l_t + \phi'(\bf{x}^l_t) \odot (\bf{W}^l)^T \cdot \bf{e}^{l-1}_t)
 $$
+
 	- in other words, the change in value of the node at timestep $t$ is a function of its error node, plus some function of its activation function run on its own value, the weights matrix for this node, and the error nodes of the layer below this one.
+
 - for $l = L$, if the output is unclamped (i.e. the "true" answer is not pinned), then
+
 $$
 \Delta \bf{x}^L_t = \gamma \cdot (\phi'(\bf{x^L_t}) \odot (\bf{W}^L)^T \cdot \bf{e}^{L-1}_t)
 $$

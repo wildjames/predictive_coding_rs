@@ -8,6 +8,9 @@ use std::path::Path;
 
 use image::{GrayImage};
 
+// IDX reader based on documentation here: https://www.fon.hum.uva.nl/praat/manual/IDX_file_format.html
+
+//Generic IDX data struct
 struct IdxData {
     data_type: u8,
     num_dimensions: u8, // e.g. 3 for images (num_images, px_x, px_y)
@@ -65,7 +68,7 @@ pub fn load_mnist<P: AsRef<Path>>(images_path: P, labels_path: P) -> io::Result<
   let images_idx = load_idx(images_path)?;
   let labels_idx = load_idx(labels_path)?;
 
-  // Check that the images are the correct data format
+  // Check that the images are the correct data format. 0x08 is unsigned byte, don't support anything else yet
   if images_idx.data_type != 0x08 || images_idx.num_dimensions != 3 {
     return Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid image IDX format"));
   }
