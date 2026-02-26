@@ -47,6 +47,11 @@ fn main() {
     "Initial error of the model is {}",
     model_error
   );
+  let model_energy = model.read_total_energy();
+  info!(
+    "Initial energy of the model is {}",
+    model_energy
+  );
 
   let training_steps: u32 = 5;
   let convergence_steps: u32 = 3;
@@ -79,6 +84,12 @@ fn main() {
   info!(
     "Final error of the model is {}",
     model_error
+  );
+
+  let model_energy = model.read_total_energy();
+  info!(
+    "Final energy of the model is {}",
+    model_energy
   );
 }
 

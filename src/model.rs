@@ -1,3 +1,7 @@
+use std::path::Path;
+
+use crate::model_utils;
+
 use ndarray::{Array1, Array2};
 use tracing::debug;
 
@@ -7,7 +11,7 @@ pub struct Layer {
   errors: Array1<f32>, // Errors for this layer, e_l
   weights: Array2<f32>, // weights to predict the layer below, w^l
   pinned: bool, // If a layer is pinned, its values are not updated during time evolution (e.g. input layers in unsupervised learning, or input and output layers in supervised learning)
-  activation_function: fn(f32) -> f32,
+  activation_function: fn(f32) -> f32
 }
 
 impl Layer {
@@ -23,7 +27,7 @@ impl Layer {
   ) -> Self {
 
     // Use provided values if we have them
-    let values = match values {
+    let values: Array1<f32> = match values {
       Some(v) => v,
       None => Array1::zeros(size)
     };
@@ -39,12 +43,15 @@ impl Layer {
       errors: Array1::zeros(size),
       weights,
       pinned: pinned.unwrap_or(false),
-      activation_function
+      activation_function,
     }
   }
 
   /// Update the predictions for this layer based on the values of the layer above it
   fn compute_predictions(&mut self, upper_layer: &Layer) {
+    // Note that the prediction computation should *never* be run for an output layer, but making sure of this is the responsibility of the model, not the layer.
+    // Besides, since an output layer has no upper layer to pass in, this function would not be callable
+
     // \bf{u}^l_{i,l} = \sum^{J_l}_{j=1}\bf{W}^{l+1}_{i,j}\phi(\bf{x}^{l+1}_{j,t})
     let activation_values: Array1<f32> = upper_layer.values.mapv(|x| (self.activation_function)(x));
 
@@ -65,7 +72,7 @@ impl Layer {
   /// Update the errors for this layer based on the predictions and values of this layer
   fn compute_errors(&mut self) {
     // error is the difference between the predicted and actual value of each node
-    self.errors = &self.predictions - &self.values;
+    self.errors = &self.values - &self.predictions;
   }
 
   fn read_total_error(&self) -> f32 {
@@ -73,15 +80,44 @@ impl Layer {
     self.errors.iter().sum()
   }
 
-  /// Compute the change in node values under a single timestep of PC.
-  /// Returns the summed change in node values across this layer
-  fn values_timestep(&mut self, _gamma: f32, _lower_layer: &Layer) -> f32 {
-    //TODO
-    0.0
+  fn read_total_energy(&self) -> f32 {
+    // Energy is the sum of the squared errors of all nodes in this layer
+    self.errors.mapv(|x| x.powi(2)).iter().sum()
   }
 
-  //TODO
-  fn update_weights(&mut self, _alpha: f32, _lower_layer: &Layer) {}
+  /// Compute the change in node values under a single timestep of PC.
+  /// Returns the summed absolute change in node values across this layer
+  /// For the input layer, there is no lower layer and None should be passed in instead
+  fn values_timestep(&mut self, gamma: f32, lower_layer: Option<&Layer>) -> f32 {
+    if self.pinned {
+      return 0.0
+    }
+
+    let mut rhs: Array1<f32> = Array1::zeros(self.values.len());
+    if let Some(lower_layer) = lower_layer {
+      // RHS: \phi(x^l) \odot (W^l)^T \cdot e^{l-1}
+      // where odot is the Hadamard product, \cdot is the dot product, and ^T is the transpose
+      let activation_values: Array1<f32> = self.values.mapv(|x| (self.activation_function) (x)); // phi(x^l)
+      let hadamard_values: Array2<f32> = model_utils::hadamard(&activation_values, &self.weights.t()).expect("Shapes should be compatible for Hadamard product"); // phi(x^l) \odot (W^l)^T
+      rhs = hadamard_values.dot(&lower_layer.errors); // phi(x^l) \odot (W^l)^T \cdot e^{l-1}
+    }
+
+    // Note that in the output layer, errors are always 0 so the first term of the parentheses is ignored.
+    let value_changes: Array1<f32> = gamma * (-&self.errors + rhs);
+
+    // Update my values and sum the changes to return
+    self.values += &value_changes;
+    value_changes.mapv(|x| x.abs()).sum()
+  }
+
+  /// Done after convergence and error calcualations to update the prediction network weights
+  fn update_weights(&mut self, alpha: f32, lower_layer: &Layer) {
+    let activation_values: Array1<f32> = self.values.mapv(|x| (self.activation_function) (x));
+    // outer product
+    let weight_changes: Array2<f32> = alpha * model_utils::outer_product(&activation_values, &lower_layer.errors);
+
+    self.weights += &weight_changes;
+  }
 }
 
 pub struct PredictiveCodingModel {
@@ -108,6 +144,10 @@ impl PredictiveCodingModel {
       alpha,
     }
   }
+
+  // TODO
+  pub fn save_to_idx<P: AsRef<Path>>(&self, _path: P) {}
+  pub fn load_from_idx<P: AsRef<Path>>(_path: P) -> Self {Self::new(&[0], 0.0, 0.0, model_utils::relu)}
 
   pub fn set_input(&mut self, input_values: Array1<f32>) {
     // Set the values of the input layer to the given input values, and pin the input layer.
@@ -148,6 +188,16 @@ impl PredictiveCodingModel {
     total_error
   }
 
+  pub fn read_total_energy(&self) -> f32 {
+    // Sum the energy of all nodes in all layers
+    let mut total_energy = 0.0;
+    for layer in &self.layers {
+      total_energy += layer.read_total_energy();
+    }
+
+    0.5 * total_energy
+  }
+
   /// Compute the change in node values under a single timestep of PC.
   /// Returns the mean change in node values across all layers
   pub fn timestep(&mut self) -> f32 {
@@ -156,14 +206,15 @@ impl PredictiveCodingModel {
     for i in 0..self.layers.len() - 1 {
       let (lower, upper) = self.layers.split_at_mut(i + 1);
       let lower_layer = &lower[i];
-      let upper_layer = &mut upper[0]; // will be updated
+      let upper_layer = &mut upper[0];
 
-      total_value_changes += upper_layer.values_timestep(self.gamma, lower_layer);
+      total_value_changes += upper_layer.values_timestep(self.gamma, Some(lower_layer));
     }
-
-    let total_num_nodes = self.layers.iter().map(|layer| layer.values.len()).sum::<usize>() as f32;
+    // And update the input layer, which has no lower layer
+    self.layers[0].values_timestep(self.gamma, None);
 
     // Mean
+    let total_num_nodes = self.layers.iter().map(|layer| layer.values.len()).sum::<usize>() as f32;
     total_value_changes / total_num_nodes
   }
 
@@ -171,7 +222,7 @@ impl PredictiveCodingModel {
     for i in 0..self.layers.len() - 1 {
       let (lower, upper) = self.layers.split_at_mut(i + 1);
       let lower_layer = &lower[i];
-      let upper_layer = &mut upper[0]; // will be updated
+      let upper_layer = &mut upper[0];
 
       upper_layer.update_weights(self.alpha, lower_layer);
     }
