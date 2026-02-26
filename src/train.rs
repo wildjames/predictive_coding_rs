@@ -27,7 +27,7 @@ fn main() {
 
 
   let layer_sizes: Vec<usize> = vec![28*28, 256, 128, 64, 10];
-  let gamma: f32 = 0.01;
+  let gamma: f32 = 0.0001;
   let alpha: f32 = 0.01;
 
   let mut model = model::PredictiveCodingModel::new(
@@ -41,6 +41,10 @@ fn main() {
   let input_row = data.images.row(rand_index).mapv(|x| x as f32 / 255.0).to_owned();
   model.set_input(input_row);
 
+  let model_energy_history: Vec<f32> = Vec::new();
+  let model_error_history: Vec<f32> = Vec::new();
+  let model_value_change_histories: Vec<Vec<f32>> = Vec::new();
+
   model.compute_errors();
   let model_error = model.read_total_error();
   info!(
@@ -53,21 +57,18 @@ fn main() {
     model_energy
   );
 
-  let training_steps: u32 = 5;
-  let convergence_steps: u32 = 3;
-  let convergence_threshold: f32 = 0.01;
+  let training_steps: u32 = 1;
+  let convergence_steps: u32 = 1000;
+  let convergence_threshold: f32 = 0.0;
 
   for step in 0..training_steps {
-    info!("Training step {}", step);
-
     let mut converged: bool = false;
     let mut convergence_count: u32 = 0;
 
     while !converged && convergence_count < convergence_steps {
-      debug!("Timestep {}", convergence_count);
       let value_change = model.timestep();
-      debug!("Value change: {}", value_change);
 
+      debug!("Step {}, convergence count {}, value change {}", step, convergence_count, value_change);
       if value_change.abs() < convergence_threshold {
         info!("Model converged after {} timesteps", convergence_count);
         converged = true;
