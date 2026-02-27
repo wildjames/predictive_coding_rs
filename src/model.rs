@@ -152,16 +152,12 @@ impl PredictiveCodingModel {
   }
 
   pub fn compute_predictions(&mut self) {
-    debug!("I have {} layers", self.layers.len());
     for i in (0..self.layers.len() - 1).rev() { // iterate backwards through the layers
-      debug!("Computing predictions for layer {}", i);
       // Since the target layer needs to be mutable to update the predictions, I need to split the vector
       // Luckily, this is not a transformative operation, so split_at_mut is still fast
       let (lower, upper) = self.layers.split_at_mut(i+1);
-      debug!("lower has len {}, upper has len {}", lower.len(), upper.len());
       let lower_layer = &mut lower[i];
       let upper_layer = &upper[0];
-      debug!("Got layers");
 
       lower_layer.compute_predictions(upper_layer);
     }

@@ -28,7 +28,12 @@ fn main() {
 
   let layer_sizes: Vec<usize> = vec![28*28, 256, 128, 64, 10];
   let gamma: f32 = 0.0001;
-  let alpha: f32 = 0.01;
+  let alpha: f32 = 0.0001;
+
+  let training_steps: u32 = 100;
+  let convergence_steps: u32 = 100;
+  let convergence_threshold: f32 = 0.0;
+
 
   let mut model = model::PredictiveCodingModel::new(
     &layer_sizes,
@@ -41,9 +46,11 @@ fn main() {
   let input_row = data.images.row(rand_index).mapv(|x| x as f32 / 255.0).to_owned();
   model.set_input(input_row);
 
-  let model_energy_history: Vec<f32> = Vec::new();
-  let model_error_history: Vec<f32> = Vec::new();
-  let model_value_change_histories: Vec<Vec<f32>> = Vec::new();
+  // TODO: Plot these over time (live graph would be cool)
+  // https://github.com/ulikoehler/liveplot-rs
+  // let model_energy_history: Vec<f32> = Vec::new();
+  // let model_error_history: Vec<f32> = Vec::new();
+  // let model_value_change_histories: Vec<Vec<f32>> = Vec::new(); // plot with transparency, which fades out for previous convergence runs?
 
   model.compute_errors();
   let model_error = model.read_total_error();
@@ -57,28 +64,33 @@ fn main() {
     model_energy
   );
 
-  let training_steps: u32 = 1;
-  let convergence_steps: u32 = 1000;
-  let convergence_threshold: f32 = 0.0;
-
   for step in 0..training_steps {
     let mut converged: bool = false;
     let mut convergence_count: u32 = 0;
 
+    let mut value_change: f32 = 0.0;
     while !converged && convergence_count < convergence_steps {
-      let value_change = model.timestep();
+      value_change = model.timestep();
 
-      debug!("Step {}, convergence count {}, value change {}", step, convergence_count, value_change);
       if value_change.abs() < convergence_threshold {
-        info!("Model converged after {} timesteps", convergence_count);
         converged = true;
       }
       convergence_count += 1;
+
     };
 
     model.update_weights();
     model.compute_predictions();
     model.compute_errors();
+
+    debug!(
+      "Step {}, convergence count {}, value change {}, error {}, energy {}",
+      step,
+      convergence_count,
+      value_change,
+      model.read_total_energy(),
+      model.read_total_error(),
+    );
   }
 
   let model_error = model.read_total_error();
