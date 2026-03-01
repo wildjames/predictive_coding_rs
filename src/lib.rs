@@ -7,6 +7,6 @@ pub mod model;
 /// Math utilities used by model components.
 pub mod model_utils;
 /// Dataset loading and preprocessing helpers.
-pub mod train_data_handler;
+pub mod data_handler;
 /// Training orchestration utilities for the predictive coding model.
 pub mod train_model_handler;

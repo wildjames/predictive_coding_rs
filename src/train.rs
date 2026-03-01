@@ -2,7 +2,7 @@
 
 mod model;
 mod model_utils;
-mod train_data_handler;
+mod data_handler;
 mod train_model_handler;
 
 use tracing::{Level, info};
@@ -22,7 +22,7 @@ fn main() {
     .unwrap_or(DEFAULT_USE_LIVE_PLOT);
 
 
-  let data: train_data_handler::ImagesBWDataset = train_data_handler::load_mnist(
+  let data: data_handler::ImagesBWDataset = data_handler::load_mnist(
       "data/mnist/train-images-idx3-ubyte",
       "data/mnist/train-labels-idx1-ubyte")
     .unwrap();
@@ -47,8 +47,8 @@ fn main() {
 
   // Training params
   let training_steps: u32 = 1000;
-  let convergence_steps: u32 = 1000;
-  let convergence_threshold: f32 = 0.0000001;
+  let convergence_steps: u32 = 100;
+  let convergence_threshold: f32 = 0.000001;
 
   // Build the model
   let mut model: model::PredictiveCodingModel = model::PredictiveCodingModel::new(

@@ -1,4 +1,8 @@
-use predictive_coding::train_data_handler::{load_mnist, output_image, ImagesBWDataset};
+use predictive_coding::data_handler::{
+  load_mnist,
+  output_image,
+  ImagesBWDataset
+};
 
 fn main() {
   let data: ImagesBWDataset = load_mnist(

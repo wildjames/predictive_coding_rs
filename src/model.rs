@@ -2,6 +2,8 @@
 //!
 //! Defines a layered model with local prediction errors and weight updates.
 
+use std::path::Path;
+
 use crate::model_utils;
 
 use ndarray::{Array1, Array2};
@@ -102,22 +104,28 @@ impl Layer {
       return 0.0
     }
 
-    let mut rhs: Array1<f32> = Array1::zeros(self.values.len());
-    if let Some(lower_layer) = lower_layer {
+    let rhs: Array1<f32> = if let Some(lower_layer) = lower_layer {
       // RHS: \phi(x^l) \odot ((W^l)^T \cdot e^{l-1})
       // where odot is the Hadamard product and ^T is the transpose
-      let activation_values: Array1<f32> = self.values.mapv(|x| (self.activation_function_derivitive)(x)); // phi(x^l)
-      let weighted_errors: Array1<f32> = self.weights.t().dot(&lower_layer.errors); // (W^l)^T \cdot e^{l-1}
-      rhs = activation_values * weighted_errors; // phi(x^l) \odot ((W^l)^T \cdot e^{l-1})
-    }
+
+      // phi(x^l)
+      let activation_values: Array1<f32> = self.values.mapv(|x| (self.activation_function_derivitive)(x));
+
+      // (W^l)^T \cdot e^{l-1}
+      let weighted_errors: Array1<f32> = self.weights.t().dot(&lower_layer.errors);
+
+      // phi(x^l) \odot ((W^l)^T \cdot e^{l-1})
+      activation_values * weighted_errors
+    } else {
+       Array1::zeros(self.values.len())
+    };
 
     // Note that in the output layer, errors are always 0 so the first term of the parentheses is ignored.
-    let value_changes: Array1<f32>;
-    if is_top_level {
-      value_changes = gamma * rhs;
+    let value_changes: Array1<f32> = if is_top_level {
+      gamma * rhs
     } else {
-      value_changes = gamma * (-&self.errors + rhs);
-    }
+      gamma * (-&self.errors + rhs)
+    };
 
     // Update my values and sum the changes to return
     self.values += &value_changes;
@@ -183,10 +191,6 @@ impl PredictiveCodingModel {
     }
   }
 
-  // TODO
-  // pub fn save_to_idx<P: AsRef<Path>>(&self, _path: P) {}
-  // pub fn load_from_idx<P: AsRef<Path>>(_path: P) -> Self {Self::new(&[0], 0.0, 0.0, model_utils::relu)}
-
   /// Set the values of the input layer to the given input values, and pin the input layer.
   pub fn set_input(&mut self, input_values: Array1<f32>) {
     self.layers[0].pin_values(input_values);
@@ -197,14 +201,19 @@ impl PredictiveCodingModel {
     self.layers.last_mut().unwrap().pin_values(output_values);
   }
 
-  /// Evolves node values until convergence or until the maximum number of steps is reached.
+  /// Evolves node values until convergence, recomputing predictions and errors each step.
   /// Returns the number of steps taken and the per-step delta values.
-  pub fn converge_values(&mut self, convergence_threshold: f32, convergence_steps: u32) -> (u32, Vec::<f32>) {
+  pub fn converge_values_with_updates(
+    &mut self,
+    convergence_threshold: f32,
+    convergence_steps: u32
+  ) -> (u32, Vec::<f32>) {
     let mut converged: bool = false;
     let mut convergence_count: u32 = 0;
 
     let mut value_changes: Vec<f32> = vec![];
     while !converged && (convergence_count < convergence_steps) {
+      self.compute_predictions_and_errors();
       value_changes.push(self.timestep());
 
       if value_changes.last().unwrap().abs() < convergence_threshold {
@@ -224,7 +233,8 @@ impl PredictiveCodingModel {
 
   /// Compute predictions for all layers from top to bottom.
   pub fn compute_predictions(&mut self) {
-    for i in (0..self.layers.len() - 1).rev() { // iterate backwards through the layers
+    let num_layers = self.layers.len();
+    for i in (0..num_layers - 1).rev() { // iterate backwards through the layers
       // Since the target layer needs to be mutable to update the predictions, I need to split the vector
       // Luckily, this is not a transformative operation, so split_at_mut is still fast
       let (lower, upper) = self.layers.split_at_mut(i+1);
@@ -273,7 +283,7 @@ impl PredictiveCodingModel {
 
     // the update of a node value depends on the errors of the layer below it.
     let num_layers: usize = self.layers.len();
-    for i in 0..num_layers {
+    for i in 0..num_layers - 1 {
       let (lower, upper) = self.layers.split_at_mut(i + 1);
       let lower_layer: &Layer = &lower[i];
       let upper_layer: &mut Layer = &mut upper[0];
@@ -293,7 +303,8 @@ impl PredictiveCodingModel {
 
   /// Update prediction weights for all layers after inference.
   pub fn update_weights(&mut self) {
-    for i in 0..self.layers.len() - 1 {
+    let num_layers = self.layers.len();
+    for i in 0..num_layers - 1 {
       let (lower, upper) = self.layers.split_at_mut(i + 1);
       let lower_layer = &lower[i];
       let upper_layer = &mut upper[0];

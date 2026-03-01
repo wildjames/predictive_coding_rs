@@ -15,10 +15,10 @@ use ndarray::{Array1, Array2, s};
 
 /// Generic IDX data struct
 struct IdxData {
-    data_type: u8,
-    num_dimensions: u8, // e.g. 3 for images (num_images, px_x, px_y)
-    dimensions: Vec<u32>, // dimensions of the data, e.g. [60000, 28, 28] for the images
-    data: Array1<u8>, // byte data
+  data_type: u8,
+  num_dimensions: u8, // e.g. 3 for images (num_images, px_x, px_y)
+  dimensions: Vec<u32>, // dimensions of the data, e.g. [60000, 28, 28] for the images
+  data: Array1<u8>, // byte data
 }
 
 /// Load an IDX file into a flattened byte array with metadata.
@@ -60,6 +60,7 @@ fn load_idx<P: AsRef<Path>>(path: P) -> io::Result<IdxData> {
     data,
   })
 }
+
 
 /// Black and white, single channel images with labels. e.g. MNIST dataset
 pub struct ImagesBWDataset {
@@ -114,6 +115,7 @@ pub fn load_mnist<P: AsRef<Path>>(images_path: P, labels_path: P) -> io::Result<
 }
 
 /// Write a single dataset image to disk as a grayscale PNG.
+#[allow(dead_code)]
 pub fn output_image<P: AsRef<Path>>(
   data: &ImagesBWDataset,
   index: usize,
