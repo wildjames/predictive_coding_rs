@@ -35,4 +35,11 @@ pub fn relu(x: f32) -> f32 {
   }
 }
 
+pub fn relu_derivitive(x: f32) -> f32 {
+  if x > 0.0 {
+    1.0
+  } else {
+    0.0
+  }
+}
 

@@ -15,6 +15,7 @@ pub struct Layer {
   weights: Array2<f32>, // weights to predict the layer below, w^l
   pinned: bool, // If a layer is pinned, its values are not updated during time evolution (e.g. input layers in unsupervised learning, or input and output layers in supervised learning)
   activation_function: fn(f32) -> f32,
+  activation_function_derivitive: fn(f32) -> f32,
   pub size: usize // The number of nodes in this layer, for easy reference. Should be the same as values.len(), predictions.len(), and errors.len()
 }
 
@@ -27,6 +28,7 @@ impl Layer {
     size: usize,
     lower_size: Option<usize>,
     activation_function: fn(f32) -> f32,
+    activation_function_derivitive: fn(f32) -> f32,
     values: Option<Array1<f32>>,
     pinned: Option<bool>
   ) -> Self {
@@ -53,6 +55,7 @@ impl Layer {
       weights,
       pinned: pinned.unwrap_or(false),
       activation_function,
+      activation_function_derivitive,
       size,
     }
   }
@@ -118,7 +121,7 @@ impl Layer {
 
   /// Update prediction weights after convergence based on lower-layer errors.
   fn update_weights(&mut self, alpha: f32, lower_layer: &Layer) {
-    let activation_values: Array1<f32> = self.values.mapv(|x| (self.activation_function) (x));
+    let activation_values: Array1<f32> = self.values.mapv(|x| (self.activation_function_derivitive) (x));
     // outer product yields (lower_size, upper_size)
     let weight_changes: Array2<f32> = alpha * model_utils::outer_product(&lower_layer.errors, &activation_values);
 
@@ -139,7 +142,13 @@ impl PredictiveCodingModel {
   /// alpha is the synaptic learning rate, which controls how much the weights are updated after each inference step.
   /// gamma is the neural learning rate, which controls how much the node values are updated during inference.
   /// activation_function is applied to the node values when computing predictions for the layer below.
-  pub fn new(layer_sizes: &[usize], gamma: f32, alpha: f32, activation_function: fn(f32) -> f32) -> Self {
+  pub fn new(
+    layer_sizes: &[usize],
+    gamma: f32,
+    alpha: f32,
+    activation_function: fn(f32) -> f32,
+    activation_function_derivitive: fn(f32) -> f32
+) -> Self {
     let mut layers = Vec::new();
     for (index, layer_size) in layer_sizes.iter().enumerate() {
       let lower_size = if index == 0 { None } else { Some(layer_sizes[index - 1]) };
@@ -147,6 +156,7 @@ impl PredictiveCodingModel {
         *layer_size,
         lower_size,
         activation_function,
+        activation_function_derivitive,
         None,
         None
       ));

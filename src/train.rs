@@ -48,14 +48,15 @@ fn main() {
   // Training params
   let training_steps: u32 = 1000;
   let convergence_steps: u32 = 1000;
-  let convergence_threshold: f32 = 0.00001;
+  let convergence_threshold: f32 = 0.0000001;
 
   // Build the model
   let mut model: model::PredictiveCodingModel = model::PredictiveCodingModel::new(
     &layer_sizes,
     gamma,
     alpha,
-    model_utils::relu
+    model_utils::relu,
+    model_utils::relu_derivitive
   );
 
 
