@@ -1,3 +1,5 @@
+//! Training binary for the predictive coding model.
+
 mod model;
 mod model_utils;
 mod train_data_handler;
@@ -6,9 +8,11 @@ mod train_model_handler;
 use tracing::{Level, info};
 
 
+/// Default value for enabling live plotting via environment variable.
 const DEFAULT_USE_LIVE_PLOT: bool = false;
 
 
+/// Entry point for loading data, building the model, and running training.
 fn main() {
   setup_tracing();
 
@@ -67,15 +71,21 @@ fn main() {
     model_energy
   );
 
-  if !use_live_plot {
-    train_model_handler::train(
+  let training_func = if use_live_plot {
+    info!("Using live plotting during training");
+    train_model_handler::train_plotting_local
+  } else {
+    info!("Training without live plotting");
+    train_model_handler::train
+  };
+
+   training_func(
       &mut model,
       &data,
       training_steps,
       convergence_steps,
       convergence_threshold
-    );
-  }
+   );
 
   let model_error = model.read_total_error();
   info!(
@@ -90,6 +100,7 @@ fn main() {
   );
 }
 
+/// Configure global tracing subscriber for logging.
 fn setup_tracing() {
   // a builder for `FmtSubscriber`.
   let subscriber = tracing_subscriber::FmtSubscriber::builder()

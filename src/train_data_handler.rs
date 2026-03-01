@@ -1,3 +1,5 @@
+//! Dataset loading and preprocessing utilities.
+
 use tracing::debug;
 
 use std::fs::File;
@@ -11,7 +13,7 @@ use ndarray::{Array1, Array2, s};
 // Homebrew IDX reader, since it's a simple format and I don't want to add a dependency.
 // IDX reader based on documentation here: https://www.fon.hum.uva.nl/praat/manual/IDX_file_format.html
 
-//Generic IDX data struct
+/// Generic IDX data struct
 struct IdxData {
     data_type: u8,
     num_dimensions: u8, // e.g. 3 for images (num_images, px_x, px_y)
@@ -19,7 +21,7 @@ struct IdxData {
     data: Array1<u8>, // byte data
 }
 
-// Returns an array of N dimensions - not known at compile time
+/// Load an IDX file into a flattened byte array with metadata.
 fn load_idx<P: AsRef<Path>>(path: P) -> io::Result<IdxData> {
   let file = File::open(path)?;
   let mut reader = BufReader::new(file);
@@ -68,6 +70,7 @@ pub struct ImagesBWDataset {
   pub image_height: u32,
 }
 
+/// Load MNIST images and labels from IDX files.
 pub fn load_mnist<P: AsRef<Path>>(images_path: P, labels_path: P) -> io::Result<ImagesBWDataset> {
 
   let images_idx = load_idx(images_path)?;
@@ -110,6 +113,7 @@ pub fn load_mnist<P: AsRef<Path>>(images_path: P, labels_path: P) -> io::Result<
   )
 }
 
+/// Write a single dataset image to disk as a grayscale PNG.
 pub fn output_image<P: AsRef<Path>>(
   data: &ImagesBWDataset,
   index: usize,

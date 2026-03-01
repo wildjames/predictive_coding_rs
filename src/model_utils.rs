@@ -1,6 +1,13 @@
+//! Math utilities for predictive coding models.
+
 use ndarray::{Array2, ArrayBase, Data, Dimension};
 
 
+/// Compute the outer product of two arbitrary-dimensional arrays flattened
+/// in iteration order.
+///
+/// Returns a matrix with shape `(a.len(), b.len())` where each element is
+/// `a[i] * b[j]`.
 pub fn outer_product<SA, DA, SB, DB>(
   a: &ArrayBase<SA, DA>,
   b: &ArrayBase<SB, DB>
@@ -19,6 +26,7 @@ where
   Array2::from_shape_fn((rows, cols), |(i, j)| a_values[i] * b_values[j])
 }
 
+/// Apply the ReLU activation function.
 pub fn relu(x: f32) -> f32 {
   if x > 0.0 {
     x

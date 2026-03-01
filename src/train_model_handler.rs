@@ -1,8 +1,11 @@
+//! Training orchestration for predictive coding models.
+
 use crate::model;
 use crate::train_data_handler;
 
 use ndarray::Array1;
 use tracing::{info, debug};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use liveplot::{
   LivePlotConfig,
@@ -12,6 +15,7 @@ use liveplot::{
 };
 
 
+/// Run inference to convergence on a single sample and update weights.
 fn converge_sample(
   model: &mut model::PredictiveCodingModel,
   input_values: Array1<f32>,
@@ -30,6 +34,7 @@ fn converge_sample(
 }
 
 
+/// Train the model for a number of steps using randomly sampled data.
 pub fn train(
   model: &mut model::PredictiveCodingModel,
   data: &train_data_handler::ImagesBWDataset,
@@ -84,15 +89,7 @@ pub fn train(
   );
 }
 
-// {
-//     // Plotting energy of the model if live plotting is enabled.
-//     if let (Some(plot_sink), Some(plot_trace)) = (&plot_sink, &plot_trace) {
-//       let energy = model.read_total_energy();
-//       let _ = plot_sink.send_point(plot_trace, PlotPoint { x: step as f64, y: energy as f64 });
-//     }
-
-// }
-
+/// Train with a local live plot of model energy.
 pub fn train_plotting_local(
   model: &mut model::PredictiveCodingModel,
   data: &train_data_handler::ImagesBWDataset,
@@ -103,12 +100,55 @@ pub fn train_plotting_local(
   let (sink, rx) = channel_plot();
   let trace = sink.create_trace("Model Energy", Some("Model Energy"));
 
-  // Run the dataset within a thread, since the plotter wants the main one.
+  // Run the dataset within a worker thread, since the plotter wants the main one.
+  std::thread::scope(|s| {
+    s.spawn(move || {
+      let output_layer_size = model.layers.last().unwrap().size;
 
+      for step in 0..training_steps {
+        let rand_index = usize::from_ne_bytes(rand::random()) % data.num_images;
 
-  // Run the plotting in the main thread
-  run_liveplot(rx, LivePlotConfig::default())
-    .expect("Failed to create the plot window. If you are on SSH, verify your VcXsrv configuration and DISPLAY settings.");
+        // Normalise to the range 0..1
+        let input_values: Array1<f32> = data.images
+          .row(rand_index)
+          .mapv(|x| x as f32 / 255.0)
+          .to_owned();
+
+        // One-hot output row with label value set to 1.0
+        let output_label: usize = data.labels[rand_index] as usize;
+        debug!("Training on sample {}, with label {}", rand_index, output_label);
+        let mut output_values: Array1<f32> = Array1::zeros(output_layer_size);
+        output_values[output_label] = 1.0;
+
+        converge_sample(
+          model,
+          input_values,
+          output_values,
+          convergence_threshold,
+          convergence_steps
+        );
+
+        let energy = model.read_total_energy();
+        let t_s = SystemTime::now()
+          .duration_since(UNIX_EPOCH)
+          .map(|d| d.as_secs_f64())
+          .unwrap_or(0.0);
+        let _ = sink.send_point(&trace, PlotPoint { x: t_s, y: energy as f64 });
+
+        debug!(
+          "Step {}, error {}, energy {}",
+          step,
+          model.read_total_energy(),
+          model.read_total_error(),
+        );
+      }
+    });
+
+    // Run the plotting in the main thread
+    run_liveplot(rx, LivePlotConfig::default())
+      .expect("Failed to create the plot window. If you are on SSH, verify your VcXsrv configuration and DISPLAY settings.");
+  });
 }
 
+/// Placeholder for gRPC-based live plotting.
 pub fn train_plotting_grpc() {}

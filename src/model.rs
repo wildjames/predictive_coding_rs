@@ -1,8 +1,13 @@
+//! Predictive coding model implementation.
+//!
+//! Defines a layered model with local prediction errors and weight updates.
+
 use crate::model_utils;
 
 use ndarray::{Array1, Array2};
 use rand::RngExt;
 
+/// A single predictive coding layer with values, predictions, errors, and weights.
 pub struct Layer {
   pub values: Array1<f32>, /// node activation values for this layer, x^l
   predictions: Array1<f32>, //Predictions for the value of nodes in this layer, according to the layer above. u^l = f(x^{l+1}, w^{l+1})
@@ -52,12 +57,13 @@ impl Layer {
     }
   }
 
+  /// Replace the layer values and pin them to avoid updates during inference.
   fn pin_values(&mut self, values: Array1<f32>) {
     self.values = values;
     self.pinned = true;
   }
 
-  /// Update the predictions for this layer based on the values of the layer above it
+  /// Update the predictions for this layer based on the values of the layer above it.
   fn compute_predictions(&mut self, upper_layer: &Layer) {
     // Note that the prediction computation should *never* be run for an output layer, but making sure of this is the responsibility of the model, not the layer.
     // Besides, since an output layer has no upper layer to pass in, this function would not be callable
@@ -67,25 +73,27 @@ impl Layer {
     self.predictions = upper_layer.weights.dot(&activation_values);
   }
 
-  /// Update the errors for this layer based on the predictions and values of this layer
+  /// Update the errors for this layer based on the predictions and values of this layer.
   fn compute_errors(&mut self) {
     // error is the difference between the predicted and actual value of each node
     self.errors = &self.values - &self.predictions;
   }
 
+  /// Sum the signed error values for all nodes in this layer.
   fn read_total_error(&self) -> f32 {
     // Sum the errors of all nodes in this layer
     self.errors.iter().sum()
   }
 
+  /// Sum the squared error values for all nodes in this layer.
   fn read_total_energy(&self) -> f32 {
     // Energy is the sum of the squared errors of all nodes in this layer
     self.errors.mapv(|x| x.powi(2)).iter().sum()
   }
 
   /// Compute the change in node values under a single timestep of PC.
-  /// Returns the summed absolute change in node values across this layer
-  /// For the input layer, there is no lower layer and None should be passed in instead
+  /// Returns the summed absolute change in node values across this layer.
+  /// For the input layer, there is no lower layer and None should be passed in instead.
   fn values_timestep(&mut self, gamma: f32, lower_layer: Option<&Layer>) -> f32 {
     if self.pinned {
       return 0.0
@@ -108,7 +116,7 @@ impl Layer {
     value_changes.mapv(|x| x.abs()).sum()
   }
 
-  /// Done after convergence and error calcualations to update the prediction network weights
+  /// Update prediction weights after convergence based on lower-layer errors.
   fn update_weights(&mut self, alpha: f32, lower_layer: &Layer) {
     let activation_values: Array1<f32> = self.values.mapv(|x| (self.activation_function) (x));
     // outer product yields (lower_size, upper_size)
@@ -118,6 +126,7 @@ impl Layer {
   }
 }
 
+/// A multi-layer predictive coding model with value and weight updates.
 pub struct PredictiveCodingModel {
   pub layers: Vec<Layer>,
   pub gamma: f32, // neural learning rate
@@ -125,6 +134,11 @@ pub struct PredictiveCodingModel {
 }
 
 impl PredictiveCodingModel {
+  /// Construct a model with the given layer sizes and learning rates.
+  ///
+  /// alpha is the synaptic learning rate, which controls how much the weights are updated after each inference step.
+  /// gamma is the neural learning rate, which controls how much the node values are updated during inference.
+  /// activation_function is applied to the node values when computing predictions for the layer below.
   pub fn new(layer_sizes: &[usize], gamma: f32, alpha: f32, activation_function: fn(f32) -> f32) -> Self {
     let mut layers = Vec::new();
     for (index, layer_size) in layer_sizes.iter().enumerate() {
@@ -159,8 +173,8 @@ impl PredictiveCodingModel {
     self.layers.last_mut().unwrap().pin_values(output_values);
   }
 
-  /// Evolves the node values until the model converges, or until we've hit the maximum number of timesteps.
-  /// Returns the number of steps taken to converge, and the delta x values for each convergence step
+  /// Evolves node values until convergence or until the maximum number of steps is reached.
+  /// Returns the number of steps taken and the per-step delta values.
   pub fn converge_values(&mut self, convergence_threshold: f32, convergence_steps: u32) -> (u32, Vec::<f32>) {
     let mut converged: bool = false;
     let mut convergence_count: u32 = 0;
@@ -178,11 +192,13 @@ impl PredictiveCodingModel {
     (convergence_count, value_changes)
   }
 
+  /// Compute predictions for each layer and then update errors.
   pub fn compute_predictions_and_errors(&mut self) {
     self.compute_predictions();
     self.compute_errors();
   }
 
+  /// Compute predictions for all layers from top to bottom.
   pub fn compute_predictions(&mut self) {
     for i in (0..self.layers.len() - 1).rev() { // iterate backwards through the layers
       // Since the target layer needs to be mutable to update the predictions, I need to split the vector
@@ -195,12 +211,14 @@ impl PredictiveCodingModel {
     }
   }
 
+  /// Compute prediction errors for all layers.
   pub fn compute_errors(&mut self) {
     for i in 0..self.layers.len() {
       self.layers[i].compute_errors();
     }
   }
 
+  /// Sum signed errors across all layers.
   pub fn read_total_error(&self) -> f32 {
     // Sum the errors of all nodes in all layers
     let mut total_error = 0.0;
@@ -210,6 +228,7 @@ impl PredictiveCodingModel {
     total_error
   }
 
+  /// Sum squared errors across all layers.
   pub fn read_total_energy(&self) -> f32 {
     // Sum the energy of all nodes in all layers
     let mut total_energy = 0.0;
@@ -221,7 +240,7 @@ impl PredictiveCodingModel {
   }
 
   /// Compute the change in node values under a single timestep of PC.
-  /// Returns the mean change in node values across all layers
+  /// Returns the mean change in node values across all layers.
   pub fn timestep(&mut self) -> f32 {
     let mut total_value_changes = 0.0;
 
@@ -242,6 +261,7 @@ impl PredictiveCodingModel {
     total_value_changes / total_num_nodes
   }
 
+  /// Update prediction weights for all layers after inference.
   pub fn update_weights(&mut self) {
     for i in 0..self.layers.len() - 1 {
       let (lower, upper) = self.layers.split_at_mut(i + 1);
