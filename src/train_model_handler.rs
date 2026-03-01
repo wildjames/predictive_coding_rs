@@ -15,6 +15,14 @@ use liveplot::{
   run_liveplot
 };
 
+use async_stream::try_stream;
+use tokio::time::interval;
+use tonic::{Request, Response, Status};
+
+use futures_core::Stream;
+use std::pin::Pin;
+
+
 fn set_input_and_output(
   model: &mut model::PredictiveCodingModel,
   data: &data_handler::ImagesBWDataset
@@ -59,9 +67,11 @@ pub fn train(
   data: &data_handler::ImagesBWDataset,
   training_steps: u32,
   convergence_steps: u32,
+  snapshot_interval: u32,
   convergence_threshold: f32
 ) {
-
+  // Current timestamp
+  let fname_base: String = format!("model_{}", chrono::Utc::now().timestamp());
 
   for step in 0..training_steps {
     train_sample(
@@ -77,6 +87,19 @@ pub fn train(
       "Step {}, error {}, energy {}",
       step, error, energy,
     );
+
+    if step % snapshot_interval == 0 {
+      info!(
+        "Step {}, error {}, energy {}",
+        step, error, energy,
+      );
+
+      let model_ser = serde_json::to_string(&model).unwrap();
+      std::fs::write(
+        format!("data/models/{}_{}.json", fname_base, step),
+        model_ser
+      ).unwrap();
+    }
   }
 
   let model_error = model.read_total_error();
@@ -98,6 +121,7 @@ pub fn train_plotting_local(
   data: &data_handler::ImagesBWDataset,
   training_steps: u32,
   convergence_steps: u32,
+  snapshot_interval: u32,
   convergence_threshold: f32) {
 
   let (sink, rx) = channel_plot();
@@ -153,5 +177,109 @@ pub fn train_plotting_local(
   });
 }
 
-/// Placeholder for gRPC-based live plotting.
-pub fn train_plotting_grpc() {}
+#[defive(Default)]
+struct TrainModelGrpcSvc {
+  model: model::PredictiveCodingModel,
+  data: data_handler::ImagesBWDataset,
+  training_steps: u32,
+  convergence_steps: u32,
+  convergence_threshold: f32
+}
+
+#[tonic::async_trait]
+impl TrainModelGrpc for TrainModelGrpcSvc {
+  type SubscribeEnergyStream = Pin<Box<dyn Stream<Item = Result<Sample, Status>> + Send + 'static>>;
+
+  async fn subscribe_energy(
+    &self,
+    _request: Request<SubscribeEnergyRequest>,
+  ) -> Result<Response<Self::SubscribeEnergyStream>, Status> {
+
+    let out = try_stream! {
+    for step in 0..training_steps {
+      train_sample(
+        &mut self.model,
+        &self.data,
+        self.convergence_threshold,
+        self.convergence_steps
+      );
+
+      let error = model.read_total_error();
+      let energy = model.read_total_energy();
+      debug!(
+        "Step {}, error {}, energy {}",
+        step, error, energy,
+      );
+      let sample: Sample = Sample {
+        step, error, energy
+      };
+      yield Ok(sample);
+    }
+  };
+
+    Ok(Response::new(Box::pin(out) as Self::SubscribeEnergyStream))
+  }
+}
+
+
+async fn start_grpc_server(
+  model: model::PredictiveCodingModel,
+  data: data_handler::ImagesBWDataset,
+  training_steps: u32,
+  convergence_steps: u32,
+  convergence_threshold: f32
+) -> Result<(), Box<dyn std::error::Error>> {
+  let addr = "[::1]:50051".parse()?;
+  let svc = TrainModelGrpcSvc {
+    model,
+    data,
+    training_steps,
+    convergence_steps,
+    convergence_threshold
+  };
+
+  info!("Starting gRPC server on {}", addr);
+  Server::builder()
+    .add_service(TrainModelGrpcServer::new(svc))
+    .serve(addr)
+    .await?;
+
+  Ok(())
+}
+
+async fn start_grpc_client(addr: String) -> Result<(), Box<dyn std::error::Error>> {
+  let (tx, rx) = mpsc::channel::<PlotCommand>();
+
+  let ui_handle = std::thread::sparn(move || {
+    if let Err(e) = run_liveplot(rx, LivePlotConfig::default()) {
+      eprintln!("Failed to run live plot: {}", e);
+    }
+  });
+
+  let mut client = TrainModelGrpcClient::connect(addr).await?;
+  let mut stream = client.subscribe_energy(Request::new(SubscribeEnergyRequest {}))
+    .await?
+    .into_inner();
+
+  let _ = tx.send(PlotCommand::RegisterTrace {
+    id: 1,
+    name: "Model Energy".into(),
+    info: None,
+  });
+
+  while let Some(sample) = stream.message().await? {
+    let step = sample.step as f64;
+    let energy = sample.energy as f64;
+    let cmd = PlotCommand::Point{
+      trace_id: 1,
+      point: PlotPoint { x: step, y: energy }
+    };
+    if tx.send(cmd).is_err() {
+      error!("Failed to send plot command, UI thread may have exited");
+      break;
+    }
+  }
+
+  let _ = ui_handle.join();
+  Ok(())
+}

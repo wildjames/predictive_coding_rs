@@ -46,6 +46,7 @@ fn main() {
   let alpha: f32 = 0.0001;
 
   // Training params
+  let snapshot_interval: u32 = 100;
   let training_steps: u32 = 1000;
   let convergence_steps: u32 = 100;
   let convergence_threshold: f32 = 0.000001;
@@ -84,6 +85,7 @@ fn main() {
       &data,
       training_steps,
       convergence_steps,
+      snapshot_interval,
       convergence_threshold
    );
 
@@ -100,7 +102,7 @@ fn main() {
   );
 
   let model_ser = serde_json::to_string(&model).unwrap();
-  std::fs::write("model.json", model_ser).unwrap();
+  std::fs::write("data/models/model.json", model_ser).unwrap();
 }
 
 /// Configure global tracing subscriber for logging.
