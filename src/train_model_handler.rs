@@ -5,10 +5,11 @@ use crate::train_data_handler;
 
 use ndarray::Array1;
 use tracing::{info, debug};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use liveplot::{
+  data::x_formatter::{XFormatter, DecimalFormatter},
   LivePlotConfig,
+  AutoFitConfig,
   PlotPoint,
   channel_plot,
   run_liveplot
@@ -128,24 +129,41 @@ pub fn train_plotting_local(
           convergence_steps
         );
 
+        let error = model.read_total_error();
         let energy = model.read_total_energy();
-        let t_s = SystemTime::now()
-          .duration_since(UNIX_EPOCH)
-          .map(|d| d.as_secs_f64())
-          .unwrap_or(0.0);
-        let _ = sink.send_point(&trace, PlotPoint { x: t_s, y: energy as f64 });
+        let step_x = step as f64;
+        // skip the first sample, since it will have massive energy
+        if step > 0 {
+          let _ = sink.send_point(&trace, PlotPoint { x: step_x, y: energy as f64 });
+        }
 
         debug!(
           "Step {}, error {}, energy {}",
-          step,
-          model.read_total_energy(),
-          model.read_total_error(),
+          step, error, energy,
         );
       }
     });
 
     // Run the plotting in the main thread
-    run_liveplot(rx, LivePlotConfig::default())
+    let auto_fit = AutoFitConfig {
+      auto_fit_to_view: true,
+      keep_max_fit: true
+    };
+
+    let x_formatter = XFormatter::Decimal(DecimalFormatter {
+      decimal_places: Some(0),
+      unit: None
+    });
+
+    let cfg = LivePlotConfig {
+      time_window_secs: training_steps as f64,
+      max_points: training_steps as usize,
+      x_formatter,
+      auto_fit,
+      ..Default::default()
+    };
+
+    run_liveplot(rx, cfg)
       .expect("Failed to create the plot window. If you are on SSH, verify your VcXsrv configuration and DISPLAY settings.");
   });
 }
