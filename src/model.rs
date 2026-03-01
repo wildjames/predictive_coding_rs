@@ -2,22 +2,22 @@
 //!
 //! Defines a layered model with local prediction errors and weight updates.
 
-use std::path::Path;
+use crate::model_utils::{self, ActivationFunction};
 
-use crate::model_utils;
+use serde::{Deserialize, Serialize};
 
 use ndarray::{Array1, Array2};
 use rand::RngExt;
 
 /// A single predictive coding layer with values, predictions, errors, and weights.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Layer {
   pub values: Array1<f32>, /// node activation values for this layer, x^l
   predictions: Array1<f32>, //Predictions for the value of nodes in this layer, according to the layer above. u^l = f(x^{l+1}, w^{l+1})
   errors: Array1<f32>, // Errors for this layer, e^l
   weights: Array2<f32>, // weights to predict the layer below, w^l
   pinned: bool, // If a layer is pinned, its values are not updated during time evolution (e.g. input layers in unsupervised learning, or input and output layers in supervised learning)
-  activation_function: fn(f32) -> f32,
-  activation_function_derivitive: fn(f32) -> f32,
+  activation_function: ActivationFunction,
   pub size: usize // The number of nodes in this layer, for easy reference. Should be the same as values.len(), predictions.len(), and errors.len()
 }
 
@@ -29,8 +29,7 @@ impl Layer {
   fn new(
     size: usize,
     lower_size: Option<usize>,
-    activation_function: fn(f32) -> f32,
-    activation_function_derivitive: fn(f32) -> f32,
+    activation_function: ActivationFunction,
     values: Option<Array1<f32>>,
     pinned: Option<bool>
   ) -> Self {
@@ -57,7 +56,6 @@ impl Layer {
       weights,
       pinned: pinned.unwrap_or(false),
       activation_function,
-      activation_function_derivitive,
       size,
     }
   }
@@ -74,7 +72,7 @@ impl Layer {
     // Besides, since an output layer has no upper layer to pass in, this function would not be callable
 
     // \bf{u}^l = \bf{W}^{l+1} \phi(\bf{x}^{l+1})
-    let activation_values: Array1<f32> = upper_layer.values.mapv(|x| (upper_layer.activation_function)(x));
+    let activation_values: Array1<f32> = upper_layer.values.mapv(|x| upper_layer.activation_function.apply(x));
     self.predictions = upper_layer.weights.dot(&activation_values);
   }
 
@@ -109,7 +107,7 @@ impl Layer {
       // where odot is the Hadamard product and ^T is the transpose
 
       // phi(x^l)
-      let activation_values: Array1<f32> = self.values.mapv(|x| (self.activation_function_derivitive)(x));
+      let activation_values: Array1<f32> = self.values.mapv(|x| self.activation_function.derivative(x));
 
       // (W^l)^T \cdot e^{l-1}
       let weighted_errors: Array1<f32> = self.weights.t().dot(&lower_layer.errors);
@@ -143,7 +141,7 @@ impl Layer {
 
   /// Update prediction weights after convergence based on lower-layer errors.
   fn update_weights(&mut self, alpha: f32, lower_layer: &Layer) {
-    let activation_values: Array1<f32> = self.values.mapv(|x| (self.activation_function) (x));
+    let activation_values: Array1<f32> = self.values.mapv(|x| self.activation_function.apply(x));
     // outer product yields (lower_size, upper_size)
     let weight_changes: Array2<f32> = alpha * model_utils::outer_product(&lower_layer.errors, &activation_values);
 
@@ -152,6 +150,7 @@ impl Layer {
 }
 
 /// A multi-layer predictive coding model with value and weight updates.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PredictiveCodingModel {
   pub layers: Vec<Layer>,
   pub gamma: f32, // neural learning rate
@@ -168,8 +167,7 @@ impl PredictiveCodingModel {
     layer_sizes: &[usize],
     gamma: f32,
     alpha: f32,
-    activation_function: fn(f32) -> f32,
-    activation_function_derivitive: fn(f32) -> f32
+    activation_function: ActivationFunction
 ) -> Self {
     let mut layers = Vec::new();
     for (index, layer_size) in layer_sizes.iter().enumerate() {
@@ -178,7 +176,6 @@ impl PredictiveCodingModel {
         *layer_size,
         lower_size,
         activation_function,
-        activation_function_derivitive,
         None,
         None
       ));

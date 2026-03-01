@@ -1,6 +1,29 @@
 //! Math utilities for predictive coding models.
 
 use ndarray::{Array2, ArrayBase, Data, Dimension};
+use serde::{Deserialize, Serialize};
+
+/// Activation function identifiers for serialization-friendly models.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ActivationFunction {
+  Relu,
+}
+
+impl ActivationFunction {
+  /// Apply the activation function.
+  pub fn apply(&self, x: f32) -> f32 {
+    match self {
+      ActivationFunction::Relu => relu(x),
+    }
+  }
+
+  /// Apply the activation function derivative.
+  pub fn derivative(&self, x: f32) -> f32 {
+    match self {
+      ActivationFunction::Relu => relu_derivitive(x),
+    }
+  }
+}
 
 
 /// Compute the outer product of two arbitrary-dimensional arrays flattened

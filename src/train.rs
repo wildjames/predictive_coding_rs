@@ -55,8 +55,7 @@ fn main() {
     &layer_sizes,
     gamma,
     alpha,
-    model_utils::relu,
-    model_utils::relu_derivitive
+    model_utils::ActivationFunction::Relu
   );
 
 
@@ -99,6 +98,9 @@ fn main() {
     "Final energy of the model is {}",
     model_energy
   );
+
+  let model_ser = serde_json::to_string(&model).unwrap();
+  std::fs::write("model.json", model_ser).unwrap();
 }
 
 /// Configure global tracing subscriber for logging.

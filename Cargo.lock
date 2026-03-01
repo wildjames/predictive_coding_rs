@@ -2376,6 +2376,7 @@ dependencies = [
  "portable-atomic",
  "portable-atomic-util",
  "rawpointer",
+ "serde",
 ]
 
 [[package]]
@@ -3046,6 +3047,8 @@ dependencies = [
  "liveplot",
  "ndarray",
  "rand 0.10.0",
+ "serde",
+ "serde_json",
  "tracing",
  "tracing-subscriber",
 ]
