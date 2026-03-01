@@ -72,7 +72,7 @@ impl Layer {
     // Besides, since an output layer has no upper layer to pass in, this function would not be callable
 
     // \bf{u}^l = \bf{W}^{l+1} \phi(\bf{x}^{l+1})
-    let activation_values: Array1<f32> = upper_layer.values.mapv(|x| (self.activation_function)(x));
+    let activation_values: Array1<f32> = upper_layer.values.mapv(|x| (upper_layer.activation_function)(x));
     self.predictions = upper_layer.weights.dot(&activation_values);
   }
 
@@ -97,7 +97,7 @@ impl Layer {
   /// Compute the change in node values under a single timestep of PC.
   /// Returns the summed absolute change in node values across this layer.
   /// For the input layer, there is no lower layer and None should be passed in instead.
-  fn values_timestep(&mut self, gamma: f32, lower_layer: Option<&Layer>) -> f32 {
+  fn _values_timestep(&mut self, is_top_level: bool, gamma: f32, lower_layer: Option<&Layer>) -> f32 {
     if self.pinned {
       return 0.0
     }
@@ -106,22 +106,36 @@ impl Layer {
     if let Some(lower_layer) = lower_layer {
       // RHS: \phi(x^l) \odot ((W^l)^T \cdot e^{l-1})
       // where odot is the Hadamard product and ^T is the transpose
-      let activation_values: Array1<f32> = self.values.mapv(|x| (self.activation_function)(x)); // phi(x^l)
+      let activation_values: Array1<f32> = self.values.mapv(|x| (self.activation_function_derivitive)(x)); // phi(x^l)
       let weighted_errors: Array1<f32> = self.weights.t().dot(&lower_layer.errors); // (W^l)^T \cdot e^{l-1}
       rhs = activation_values * weighted_errors; // phi(x^l) \odot ((W^l)^T \cdot e^{l-1})
     }
 
     // Note that in the output layer, errors are always 0 so the first term of the parentheses is ignored.
-    let value_changes: Array1<f32> = gamma * (-&self.errors + rhs);
+    let value_changes: Array1<f32>;
+    if is_top_level {
+      value_changes = gamma * rhs;
+    } else {
+      value_changes = gamma * (-&self.errors + rhs);
+    }
 
     // Update my values and sum the changes to return
     self.values += &value_changes;
     value_changes.mapv(|x| x.abs()).sum()
   }
 
+  fn values_timestep(&mut self, gamma: f32, lower_layer: Option<&Layer>) -> f32 {
+    self._values_timestep(false, gamma, lower_layer)
+  }
+
+
+  fn values_timestep_top_level(&mut self, gamma: f32, lower_layer: &Layer) -> f32 {
+    self._values_timestep(true, gamma, Some(lower_layer))
+  }
+
   /// Update prediction weights after convergence based on lower-layer errors.
   fn update_weights(&mut self, alpha: f32, lower_layer: &Layer) {
-    let activation_values: Array1<f32> = self.values.mapv(|x| (self.activation_function_derivitive) (x));
+    let activation_values: Array1<f32> = self.values.mapv(|x| (self.activation_function) (x));
     // outer product yields (lower_size, upper_size)
     let weight_changes: Array2<f32> = alpha * model_utils::outer_product(&lower_layer.errors, &activation_values);
 
@@ -257,13 +271,19 @@ impl PredictiveCodingModel {
     // update the input layer, which has no lower layer
     total_value_changes += self.layers[0].values_timestep(self.gamma, None);
 
-    // the update of a node value depends on the errors of the layer below it
-    for i in 0..self.layers.len() - 1 {
+    // the update of a node value depends on the errors of the layer below it.
+    let num_layers: usize = self.layers.len();
+    for i in 0..num_layers {
       let (lower, upper) = self.layers.split_at_mut(i + 1);
-      let lower_layer = &lower[i];
-      let upper_layer = &mut upper[0];
+      let lower_layer: &Layer = &lower[i];
+      let upper_layer: &mut Layer = &mut upper[0];
 
-      total_value_changes += upper_layer.values_timestep(self.gamma, Some(lower_layer));
+      // The last layer is handled differently.
+      if i == num_layers {
+        total_value_changes += upper_layer.values_timestep_top_level(self.gamma, lower_layer);
+      } else {
+        total_value_changes += upper_layer.values_timestep(self.gamma, Some(lower_layer));
+      }
     }
 
     // Mean
