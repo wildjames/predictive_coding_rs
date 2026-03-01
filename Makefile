@@ -15,5 +15,5 @@ clean:
 train: build
 	cargo run --bin train
 
-infer: build
-	cargo run --bin infer
+test-liveplot: build
+	WGPU_BACKEND=gl WINIT_UNIX_BACKEND=x11 LIBGL_ALWAYS_SOFTWARE=1 cargo run --bin test-liveplot

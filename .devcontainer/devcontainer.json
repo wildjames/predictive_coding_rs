@@ -1,6 +1,17 @@
 {
 	"name": "PredictiveCodingRust",
-	"image": "mcr.microsoft.com/devcontainers/rust:latest",
+	// "image": "mcr.microsoft.com/devcontainers/rust:latest",
+	"build": {
+		"dockerfile": "Dockerfile",
+		"context": ".."
+	},
+	"containerEnv": {
+		"DISPLAY": "${localEnv:DISPLAY}"
+	},
+	"runArgs": [
+		"-v",
+		"/tmp/.X11-unix:/tmp/.X11-unix:rw"
+	],
 	"remoteUser": "root",
 	"customizations": {
 		"vscode": {
@@ -12,7 +23,8 @@
 				"ZhangYue.rust-mod-generator",
 				"mooman219.rust-assist",
 				"jinxdash.prettier-rust",
-				"Zerotaskx.rust-extension-pack"
+				"Zerotaskx.rust-extension-pack",
+				"mikestead.dotenv"
 			]
 		}
 	}

@@ -8,12 +8,14 @@ name = "train"
 path = "src/train.rs"
 
 [[bin]]
-name = "infer"
-path = "src/infer.rs"
+name = "test-liveplot"
+path = "src/test-liveplot.rs"
 
 [dependencies]
 clippy = "0.0.302"
+eframe = "0.33.3"
 image = "0.25.9"
+liveplot = "2.0.1"
 ndarray = "0.17.2"
 rand = "0.10.0"
 tracing = "0.1.44"
