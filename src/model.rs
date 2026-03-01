@@ -2,15 +2,15 @@ use crate::model_utils;
 
 use ndarray::{Array1, Array2};
 use rand::RngExt;
-use tracing::debug;
 
 pub struct Layer {
-  values: Array1<f32>, /// node activation values for this layer, x^l
+  pub values: Array1<f32>, /// node activation values for this layer, x^l
   predictions: Array1<f32>, //Predictions for the value of nodes in this layer, according to the layer above. u^l = f(x^{l+1}, w^{l+1})
   errors: Array1<f32>, // Errors for this layer, e^l
   weights: Array2<f32>, // weights to predict the layer below, w^l
   pinned: bool, // If a layer is pinned, its values are not updated during time evolution (e.g. input layers in unsupervised learning, or input and output layers in supervised learning)
-  activation_function: fn(f32) -> f32
+  activation_function: fn(f32) -> f32,
+  pub size: usize // The number of nodes in this layer, for easy reference. Should be the same as values.len(), predictions.len(), and errors.len()
 }
 
 impl Layer {
@@ -48,7 +48,13 @@ impl Layer {
       weights,
       pinned: pinned.unwrap_or(false),
       activation_function,
+      size,
     }
+  }
+
+  fn pin_values(&mut self, values: Array1<f32>) {
+    self.values = values;
+    self.pinned = true;
   }
 
   /// Update the predictions for this layer based on the values of the layer above it
@@ -143,12 +149,38 @@ impl PredictiveCodingModel {
   // pub fn save_to_idx<P: AsRef<Path>>(&self, _path: P) {}
   // pub fn load_from_idx<P: AsRef<Path>>(_path: P) -> Self {Self::new(&[0], 0.0, 0.0, model_utils::relu)}
 
+  /// Set the values of the input layer to the given input values, and pin the input layer.
   pub fn set_input(&mut self, input_values: Array1<f32>) {
-    // Set the values of the input layer to the given input values, and pin the input layer.
-    // Normalise input values to 0..1
-    let normed_input = input_values.mapv(|x| x / 255.0);
-    self.layers[0].values = normed_input;
-    self.layers[0].pinned = true;
+    self.layers[0].pin_values(input_values);
+  }
+
+  /// Set the values of the output layer to the given output values, and pins the output layer.
+  pub fn set_output(&mut self, output_values: Array1<f32>) {
+    self.layers.last_mut().unwrap().pin_values(output_values);
+  }
+
+  /// Evolves the node values until the model converges, or until we've hit the maximum number of timesteps.
+  /// Returns the number of steps taken to converge, and the delta x values for each convergence step
+  pub fn converge_values(&mut self, convergence_threshold: f32, convergence_steps: u32) -> (u32, Vec::<f32>) {
+    let mut converged: bool = false;
+    let mut convergence_count: u32 = 0;
+
+    let mut value_changes: Vec<f32> = vec![];
+    while !converged && (convergence_count < convergence_steps) {
+      value_changes.push(self.timestep());
+
+      if value_changes.last().unwrap().abs() < convergence_threshold {
+        converged = true;
+      }
+      convergence_count += 1;
+    };
+
+    (convergence_count, value_changes)
+  }
+
+  pub fn compute_predictions_and_errors(&mut self) {
+    self.compute_predictions();
+    self.compute_errors();
   }
 
   pub fn compute_predictions(&mut self) {

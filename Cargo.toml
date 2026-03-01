@@ -1,5 +1,5 @@
 [package]
-name = "predictive_coding_model"
+name = "predictive_coding"
 version = "0.1.0"
 edition = "2024"
 
@@ -7,12 +7,15 @@ edition = "2024"
 name = "train"
 path = "src/train.rs"
 
-[[bin]]
+[[example]]
 name = "test-liveplot"
-path = "src/test-liveplot.rs"
+path = "examples/test_liveplot.rs"
+
+[[example]]
+name = "test-load-data"
+path = "examples/test_load_data.rs"
 
 [dependencies]
-clippy = "0.0.302"
 eframe = "0.33.3"
 image = "0.25.9"
 liveplot = "2.0.1"

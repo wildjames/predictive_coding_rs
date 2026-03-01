@@ -1,14 +1,24 @@
-mod training_data_handler;
 mod model;
 mod model_utils;
+mod train_data_handler;
+mod train_model_handler;
 
-use tracing::{Level, info, debug};
+use tracing::{Level, info};
+
+
+const DEFAULT_USE_LIVE_PLOT: bool = false;
 
 
 fn main() {
   setup_tracing();
 
-  let data = training_data_handler::load_mnist(
+  // Read environment variables
+  let use_live_plot = std::env::var("USE_LIVE_PLOT")
+    .map(|val| val == "true")
+    .unwrap_or(DEFAULT_USE_LIVE_PLOT);
+
+
+  let data: train_data_handler::ImagesBWDataset = train_data_handler::load_mnist(
       "data/mnist/train-images-idx3-ubyte",
       "data/mnist/train-labels-idx1-ubyte")
     .unwrap();
@@ -17,79 +27,53 @@ fn main() {
     data.num_images
   );
 
-  // Display a random image
-  let rand_index = usize::from_ne_bytes(rand::random()) % data.num_images;
-  training_data_handler::output_image(
-    &data,
-    rand_index,
-    format!("data/images/output_{}_label_{}.png", rand_index, data.labels[rand_index]))
-    .unwrap();
+  // Model params
+  let input_layer_size = (data.image_width * data.image_height) as usize;
+  let output_layer_size = 10; // for the 10 classes of digits
+  let layer_sizes: Vec<usize> = vec![
+    input_layer_size,
+    256,
+    128,
+    64,
+    output_layer_size
+  ];
 
-
-  let layer_sizes: Vec<usize> = vec![28*28, 256, 128, 64, 10];
   let gamma: f32 = 0.0001;
   let alpha: f32 = 0.0001;
 
-  let training_steps: u32 = 100;
+  // Training params
+  let training_steps: u32 = 10;
   let convergence_steps: u32 = 100;
   let convergence_threshold: f32 = 0.0;
 
-
-  let mut model = model::PredictiveCodingModel::new(
+  // Build the model
+  let mut model: model::PredictiveCodingModel = model::PredictiveCodingModel::new(
     &layer_sizes,
     gamma,
     alpha,
     model_utils::relu
   );
 
-  // When setting the input, normalise the pixel values to 0..1
-  let input_row = data.images.row(rand_index).mapv(|x| x as f32 / 255.0).to_owned();
-  model.set_input(input_row);
 
-  // TODO: Plot these over time (live graph would be cool)
-  // https://github.com/ulikoehler/liveplot-rs
-  // let model_energy_history: Vec<f32> = Vec::new();
-  // let model_error_history: Vec<f32> = Vec::new();
-  // let model_value_change_histories: Vec<Vec<f32>> = Vec::new(); // plot with transparency, which fades out for previous convergence runs?
-
-  model.compute_errors();
   let model_error = model.read_total_error();
   info!(
     "Initial error of the model is {}",
     model_error
   );
+
   let model_energy = model.read_total_energy();
   info!(
     "Initial energy of the model is {}",
     model_energy
   );
 
-  for step in 0..training_steps {
-    let mut converged: bool = false;
-    let mut convergence_count: u32 = 0;
-
-    let mut value_change: f32 = 0.0;
-    while !converged && convergence_count < convergence_steps {
-      value_change = model.timestep();
-
-      if value_change.abs() < convergence_threshold {
-        converged = true;
-      }
-      convergence_count += 1;
-
-    };
-
-    model.update_weights();
-    model.compute_predictions();
-    model.compute_errors();
-
-    debug!(
-      "Step {}, convergence count {}, value change {}, error {}, energy {}",
-      step,
-      convergence_count,
-      value_change,
-      model.read_total_energy(),
-      model.read_total_error(),
+  if !use_live_plot {
+    train_model_handler::train(
+      &mut model,
+      &data,
+      training_steps,
+      convergence_steps,
+      convergence_threshold
     );
   }
 

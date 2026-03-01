@@ -1,5 +1,3 @@
-// I need to load the MNIST dataset, which is in this IDX binary format. I want to roll my own here
-
 use tracing::debug;
 
 use std::fs::File;
@@ -10,6 +8,7 @@ use image::{GrayImage};
 
 use ndarray::{Array1, Array2, s};
 
+// Homebrew IDX reader, since it's a simple format and I don't want to add a dependency.
 // IDX reader based on documentation here: https://www.fon.hum.uva.nl/praat/manual/IDX_file_format.html
 
 //Generic IDX data struct
@@ -60,7 +59,8 @@ fn load_idx<P: AsRef<Path>>(path: P) -> io::Result<IdxData> {
   })
 }
 
-pub struct MnistDataset {
+/// Black and white, single channel images with labels. e.g. MNIST dataset
+pub struct ImagesBWDataset {
   pub num_images: usize,
   pub images: Array2<u8>, // binary pixel data, images are black and white
   pub labels: Array1<u8>, // Integers from 0 to 9
@@ -68,7 +68,8 @@ pub struct MnistDataset {
   pub image_height: u32,
 }
 
-pub fn load_mnist<P: AsRef<Path>>(images_path: P, labels_path: P) -> io::Result<MnistDataset> {
+pub fn load_mnist<P: AsRef<Path>>(images_path: P, labels_path: P) -> io::Result<ImagesBWDataset> {
+
   let images_idx = load_idx(images_path)?;
   let labels_idx = load_idx(labels_path)?;
 
@@ -99,17 +100,22 @@ pub fn load_mnist<P: AsRef<Path>>(images_path: P, labels_path: P) -> io::Result<
   }
 
   Ok(
-    MnistDataset {
+    ImagesBWDataset {
       num_images,
       images,
-      labels: images_idx.data,
+      labels: labels_idx.data,
       image_height: images_idx.dimensions[1],
       image_width: images_idx.dimensions[2],
     }
   )
 }
 
-pub fn output_image<P: AsRef<Path>>(data: &MnistDataset, index: usize, output_path: P) -> image::ImageResult<GrayImage> {
+pub fn output_image<P: AsRef<Path>>(
+  data: &ImagesBWDataset,
+  index: usize,
+  output_path: P
+) -> image::ImageResult<GrayImage> {
+
   let image_data = data.images.row(index).to_vec();
   let width = data.image_width;
   let height = data.image_height;

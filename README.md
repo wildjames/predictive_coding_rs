@@ -17,4 +17,12 @@ I am running this in a devcontainer, on my server, connected to via SSH, from a 
 
 To test that the graphs will work, run `make test-liveplot`. You should get a sine wave plotted, and it should update over time. The framerate might be horrid, though.
 
-TODO: Set up a server and client, so we can stream data instead of the whole window.
+
+# TODO
+- Break out the model training from the main train file, out into the utils file.
+	- `train()`
+	- `train_plotting_local()`
+	- `train_plotting_server()`
+- Local plotting
+- Set up a plotting server and client, so we can stream data instead of the whole window.
+- Figure out the model params for a mnist classifier

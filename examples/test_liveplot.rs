@@ -1,13 +1,10 @@
 //! Example: Continuous sine wave producer
+//! Taken from the repo: https://github.com/ulikoehler/liveplot-rs/blob/master/examples/sine.rs
 //!
 //! What it demonstrates
 //! - Streaming samples into the multi-trace UI using `channel_plot()` and `PlotSink`.
 //! - Creating a trace with `create_trace` and sending points at a fixed sample rate.
 //!
-//! How to run
-//! ```bash
-//! cargo run --example sine
-//! ```
 //! You should see a single trace named "signal" rendering a live sine wave.
 
 use liveplot::{channel_plot, run_liveplot, LivePlotConfig, PlotPoint};
