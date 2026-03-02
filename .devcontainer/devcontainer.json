@@ -8,11 +8,14 @@
 	"containerEnv": {
 		"DISPLAY": "${localEnv:DISPLAY}"
 	},
+	"mounts": [
+		"source=${env:HOME}${env:USERPROFILE}/.ssh,target=/home/vscode/.ssh,type=bind"
+	],
 	"runArgs": [
 		"-v",
 		"/tmp/.X11-unix:/tmp/.X11-unix:rw"
 	],
-	"remoteUser": "root",
+	"remoteUser": "vscode",
 	"customizations": {
 		"vscode": {
 			"extensions": [
