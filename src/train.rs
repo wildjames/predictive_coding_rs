@@ -1,11 +1,13 @@
 //! Training binary for the predictive coding model.
 
-mod model;
-mod model_utils;
-mod data_handler;
-mod train_model_handler;
-
-use tracing::{Level, info};
+use predictive_coding::{
+  data_handler,
+  model,
+  model_utils,
+  train_model_handler,
+  utils,
+};
+use tracing::info;
 
 
 /// Default value for enabling live plotting via environment variable.
@@ -14,13 +16,15 @@ const DEFAULT_USE_LIVE_PLOT: bool = false;
 
 /// Entry point for loading data, building the model, and running training.
 fn main() {
-  setup_tracing();
+  utils::setup_tracing();
 
   // Read environment variables
   let use_live_plot = std::env::var("USE_LIVE_PLOT")
     .map(|val| val == "true")
     .unwrap_or(DEFAULT_USE_LIVE_PLOT);
-
+  let use_grpc_plot = std::env::var("USE_GRPC_PLOT")
+    .map(|val| val == "true")
+    .unwrap_or(false);
 
   let data: data_handler::ImagesBWDataset = data_handler::load_mnist(
       "data/mnist/train-images-idx3-ubyte",
@@ -73,8 +77,13 @@ fn main() {
   );
 
   let training_func = if use_live_plot {
-    info!("Using live plotting during training");
-    train_model_handler::train_plotting_local
+    if use_grpc_plot {
+      info!("Using gRPC plotting - starting a server for live plotting during training");
+      train_model_handler::start_grpc_server_sync
+    } else {
+      info!("Using live plotting during training");
+      train_model_handler::train_plotting_local
+    }
   } else {
     info!("Training without live plotting");
     train_model_handler::train
@@ -103,15 +112,4 @@ fn main() {
 
   let model_ser = serde_json::to_string(&model).unwrap();
   std::fs::write("data/models/model.json", model_ser).unwrap();
-}
-
-/// Configure global tracing subscriber for logging.
-fn setup_tracing() {
-  // a builder for `FmtSubscriber`.
-  let subscriber = tracing_subscriber::FmtSubscriber::builder()
-    .with_max_level(Level::TRACE)
-    .finish();
-
-  tracing::subscriber::set_global_default(subscriber)
-    .expect("Setting default subscriber failed");
 }

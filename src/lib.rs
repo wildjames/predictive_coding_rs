@@ -10,3 +10,5 @@ pub mod model_utils;
 pub mod data_handler;
 /// Training orchestration utilities for the predictive coding model.
 pub mod train_model_handler;
+/// Shared CLI utilities (logging, etc.).
+pub mod utils;

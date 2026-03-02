@@ -3285,15 +3285,21 @@ name = "predictive_coding"
 version = "0.1.0"
 dependencies = [
  "async-stream",
+ "chrono",
  "eframe",
+ "futures-core",
  "image",
  "liveplot",
  "ndarray",
+ "prost",
  "rand 0.10.0",
  "serde",
  "serde_json",
  "tokio",
  "tonic",
+ "tonic-build",
+ "tonic-prost",
+ "tonic-prost-build",
  "tracing",
  "tracing-subscriber",
 ]

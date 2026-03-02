@@ -63,6 +63,7 @@ fn load_idx<P: AsRef<Path>>(path: P) -> io::Result<IdxData> {
 
 
 /// Black and white, single channel images with labels. e.g. MNIST dataset
+#[derive(Clone)]
 pub struct ImagesBWDataset {
   pub num_images: usize,
   pub images: Array2<u8>, // binary pixel data, images are black and white

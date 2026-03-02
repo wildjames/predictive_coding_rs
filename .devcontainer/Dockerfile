@@ -10,4 +10,5 @@ RUN apt-get update && \
     x11-apps \
     libgl1 \
     libglx-mesa0 \
-    mesa-utils
+    mesa-utils \
+    protobuf-compiler
