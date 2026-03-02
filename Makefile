@@ -19,4 +19,4 @@ monitor_training: build
 	cargo run --bin train_grpc_client
 
 test-liveplot: build
-	WGPU_BACKEND=gl WINIT_UNIX_BACKEND=x11 LIBGL_ALWAYS_SOFTWARE=1 cargo run --bin test-liveplot
+	cargo run --example test-liveplot

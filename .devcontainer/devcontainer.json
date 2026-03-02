@@ -5,17 +5,14 @@
 		"dockerfile": "Dockerfile",
 		"context": ".."
 	},
+	"remoteUser": "root",
 	"containerEnv": {
 		"DISPLAY": "${localEnv:DISPLAY}"
 	},
 	"mounts": [
-		"source=${env:HOME}${env:USERPROFILE}/.ssh,target=/home/vscode/.ssh,type=bind"
+		"source=${env:HOME}${env:USERPROFILE}/.ssh,target=/root/.ssh,type=bind"
 	],
-	"runArgs": [
-		"-v",
-		"/tmp/.X11-unix:/tmp/.X11-unix:rw"
-	],
-	"remoteUser": "vscode",
+	"postCreateCommand": "git config --global --add safe.directory /workspaces/PredictiveCodingRust",
 	"customizations": {
 		"vscode": {
 			"extensions": [
