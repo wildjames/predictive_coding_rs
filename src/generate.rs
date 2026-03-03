@@ -11,7 +11,7 @@ use predictive_coding::{
 
 
 fn main() {
-  logging::setup_tracing();
+  logging::setup_tracing(false);
 
   let args: Vec<String> = env::args().collect();
   if args.len() != 3 {

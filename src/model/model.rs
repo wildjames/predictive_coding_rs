@@ -17,7 +17,8 @@ pub struct Layer {
   pub weights: Array2<f32>, // weights to predict the layer below, w^l
   pub pinned: bool, // If a layer is pinned, its values are not updated during time evolution (e.g. input layers in unsupervised learning, or input and output layers in supervised learning)
   pub activation_function: ActivationFunction,
-  pub size: usize // The number of nodes in this layer, for easy reference. Should be the same as values.len(), predictions.len(), and errors.len()
+  pub size: usize, // The number of nodes in this layer, for easy reference. Should be the same as values.len(), predictions.len(), and errors.len()
+  xavier_limit: f32,
 }
 
 impl Layer {
@@ -47,7 +48,13 @@ impl Layer {
       Some(lower) => (lower, size),
       None => (0, size),
     };
-    let weights = Array2::from_shape_fn(weights_shape, |_| rng.random_range(0.0..1.0));
+    // Xavier initialization: U(-limit, limit) where limit = sqrt(6 / (fan_in + fan_out))
+    let xavier_limit: f32 = if weights_shape.0 + weights_shape.1 > 0 {
+      (6.0_f32 / (weights_shape.0 + weights_shape.1) as f32).sqrt()
+    } else {
+      1.0
+    };
+    let weights = Array2::from_shape_fn(weights_shape, |_| rng.random_range(-xavier_limit..xavier_limit));
 
     Layer {
       values,
@@ -57,7 +64,17 @@ impl Layer {
       pinned: pinned.unwrap_or(false),
       activation_function,
       size,
+      xavier_limit,
     }
+  }
+
+  pub fn randomise_weights(&mut self) {
+    let mut rng = rand::rng();
+    self.weights = Array2::from_shape_fn(self.weights.dim(), |_| rng.random_range(-self.xavier_limit..self.xavier_limit));
+  }
+
+  pub fn randomise_values(&mut self, mut rng: rand::prelude::ThreadRng) {
+    self.values = Array1::from_shape_fn(self.values.len(), |_| rng.random_range(0.0..1.0));
   }
 
   /// Replace the layer values and pin them to avoid updates during inference.
@@ -75,9 +92,10 @@ impl Layer {
     // Note that the prediction computation should *never* be run for an output layer, but making sure of this is the responsibility of the model, not the layer.
     // Besides, since an output layer has no upper layer to pass in, this function would not be callable
 
-    // \bf{u}^l = \bf{W}^{l+1} \phi(\bf{x}^{l+1})
-    let activation_values: Array1<f32> = upper_layer.values.mapv(|x| upper_layer.activation_function.apply(x));
-    self.predictions = upper_layer.weights.dot(&activation_values);
+    // u^l = phi(W^{l+1} * x^{l+1})
+    // Preactivation first, then apply nonlinearity
+    let preactivation: Array1<f32> = upper_layer.weights.dot(&upper_layer.values);
+    self.predictions = preactivation.mapv(|a| upper_layer.activation_function.apply(a));
   }
 
   /// Update the errors for this layer based on the predictions and values of this layer.
@@ -107,17 +125,20 @@ impl Layer {
     }
 
     let rhs: Array1<f32> = if let Some(lower_layer) = lower_layer {
-      // RHS: \phi(x^l) \odot ((W^l)^T \cdot e^{l-1})
-      // where odot is the Hadamard product and ^T is the transpose
+      // RHS: W^{l,T} * (phi'(a^{l-1}) (hammard) e^{l-1})
+      // where a^{l-1} = W^l * x^l is the preactivation for the layer below (see 2506.06332)
 
-      // phi(x^l)
-      let activation_values: Array1<f32> = self.values.mapv(|x| self.activation_function.derivative(x));
+      // a^{l-1} = W^l * x^l
+      let preactivation: Array1<f32> = self.weights.dot(&self.values);
 
-      // (W^l)^T \cdot e^{l-1}
-      let weighted_errors: Array1<f32> = self.weights.t().dot(&lower_layer.errors);
+      // phi'(a^{l-1})
+      let activation_function_eval_derivitive: Array1<f32> = preactivation.mapv(|a| self.activation_function.derivative(a));
 
-      // phi(x^l) \odot ((W^l)^T \cdot e^{l-1})
-      activation_values * weighted_errors
+      // phi'(a^{l-1}) (hammard) e^{l-1}
+      let gain_modulated_errors: Array1<f32> = activation_function_eval_derivitive * &lower_layer.errors;
+
+      // W^{l,T} * (phi'(a^{l-1}) (hammard) e^{l-1})
+      self.weights.t().dot(&gain_modulated_errors)
     } else {
        Array1::zeros(self.values.len())
     };
@@ -145,9 +166,14 @@ impl Layer {
 
   /// Update prediction weights after convergence based on lower-layer errors.
   fn update_weights(&mut self, alpha: f32, lower_layer: &Layer) {
-    let activation_values: Array1<f32> = self.values.mapv(|x| self.activation_function.apply(x));
+    // W^{l+1} += alpha * (phi'(a^l) (hammard) e^l) * x^{l+1,T}
+    // where a^l = W^{l+1} * x^{l+1} is the preactivation for the layer below
+    let preactivation: Array1<f32> = self.weights.dot(&self.values);
+    let activation_function_result: Array1<f32> = preactivation.mapv(|a| self.activation_function.derivative(a));
+    let gain_modulated_errors: Array1<f32> = &activation_function_result * &lower_layer.errors;
+
     // outer product yields (lower_size, upper_size)
-    let weight_changes: Array2<f32> = alpha * outer_product(&lower_layer.errors, &activation_values);
+    let weight_changes: Array2<f32> = alpha * outer_product(&gain_modulated_errors, &self.values);
 
     self.weights += &weight_changes;
   }
@@ -228,6 +254,18 @@ impl PredictiveCodingModel {
     let output_layer = self.layers.last_mut().unwrap();
     let mut rng = rand::rng();
     output_layer.values = Array1::from_shape_fn(output_layer.size, |_| rng.random_range(0.0..1.0));
+  }
+
+  /// Reinitialise all unpinned (latent) layer values to small random values.
+  /// Should be called before each new training sample to avoid carrying over
+  /// converged state from a previous sample.
+  pub fn reinitialise_latents(&mut self) {
+    let rng = rand::rng();
+    for layer in &mut self.layers {
+      if !layer.pinned {
+        layer.randomise_values(rng.clone());
+      }
+    }
   }
 
   /// Evolves node values until convergence, recomputing predictions and errors each step.

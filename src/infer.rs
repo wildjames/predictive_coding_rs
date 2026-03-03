@@ -11,7 +11,7 @@ use predictive_coding::{
 
 
 fn main() {
-  logging::setup_tracing();
+  logging::setup_tracing(false);
 
   let args: Vec<String> = env::args().collect();
   if args.len() != 2 {
@@ -50,9 +50,22 @@ fn main() {
   model.unpin_output();
   model.randomise_output();
 
-  model.converge_values_with_updates(0.000001, 1000);
+  model.converge_values_with_updates(1e-4, 50);
 
   let output_activations = model.layers.last().unwrap().values.clone();
+  let predicted_label = output_activations
+    .iter()
+    .enumerate()
+    .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+    .map(|(i, _)| i)
+    .unwrap();
+
+  info!(
+    "Predicted label: {}. Actual label: {}",
+    predicted_label,
+    output_label
+  );
+
   output_activations
     .iter()
     .enumerate()

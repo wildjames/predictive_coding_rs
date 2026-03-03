@@ -15,7 +15,7 @@ use tracing::info;
 
 /// Entry point for loading data, building the model, and running training.
 fn main() {
-  logging::setup_tracing();
+  logging::setup_tracing(false);
 
   let data: data_handler::ImagesBWDataset = data_handler::load_mnist(
       "data/mnist/train-images-idx3-ubyte",
@@ -39,11 +39,11 @@ fn main() {
 
   // Training params
   let snapshot_interval: u32 = 100;
-  let gamma: f32 = 0.03;
+  let gamma: f32 = 0.1;
   let alpha: f32 = 0.001;
   let training_steps: u32 = 1000;
   let convergence_steps: u32 = 50;
-  let convergence_threshold: f32 = 1e-4;
+  let convergence_threshold: f32 = 1e-5;
   let activation_function: ActivationFunction = ActivationFunction::Relu;
 
   info!(

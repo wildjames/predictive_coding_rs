@@ -41,6 +41,7 @@ fn train_sample(
   convergence_steps: u32
 ) {
   set_input_and_output(model, data);
+  model.reinitialise_latents();
   // Train on this example until convergence.
   model.converge_values_with_updates(convergence_threshold, convergence_steps);
   model.update_weights();
