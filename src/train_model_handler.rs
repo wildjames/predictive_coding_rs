@@ -83,7 +83,7 @@ pub fn train(
   convergence_threshold: f32
 ) {
   // Current timestamp
-  let fname_base: String = format!("model_{}", chrono::Utc::now().timestamp());
+  let fname_base: String = format!("data/model_snapshots_{}/model", chrono::Utc::now().timestamp());
 
   for step in 0..training_steps {
     train_sample(
@@ -138,7 +138,7 @@ pub fn train_plotting_local(
   // Run the dataset within a worker thread, since the plotter wants the main one.
   std::thread::scope(|s| {
     s.spawn(move || {
-      let fname_base: String = format!("model_{}", chrono::Utc::now().timestamp());
+      let fname_base: String = format!("data/snapshots/{}/model", chrono::Utc::now().timestamp());
 
       for step in 0..training_steps {
         train_sample(
@@ -258,7 +258,7 @@ impl TrainModelGrpc for TrainModelGrpcSvc {
     let convergence_threshold = self.convergence_threshold;
 
     let out = try_stream! {
-      let fname_base: String = format!("data/model_snapshots/{}/model_snap", chrono::Utc::now().timestamp());
+      let fname_base: String = format!("data/snapshots/{}/model", chrono::Utc::now().timestamp());
       for step in 0..training_steps {
         let (error, energy) = {
           let mut model_guard = model.lock().await;

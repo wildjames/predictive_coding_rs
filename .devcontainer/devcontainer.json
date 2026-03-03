@@ -1,5 +1,5 @@
 {
-  "name": "rust_project_jim_wild",
+  "name": "predictive_coding_rust",
   "build": {
     "dockerfile": "Dockerfile",
     "context": "..",
@@ -15,7 +15,7 @@
     "source=${env:HOME}${env:USERPROFILE}/.gnupg,target=/home/vscode/.gnupg,type=bind"
   ],
   "containerEnv": {
-    "DISPLAY": "${localEnv:DISPLAY}"
+    "DISPLAY": "host.docker.internal:0.0"
   },
   "customizations": {
     "vscode": {
