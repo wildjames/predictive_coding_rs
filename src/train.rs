@@ -37,21 +37,21 @@ fn main() {
     output_layer_size
   ];
 
-  let gamma: f32 = 0.0001;
-  let alpha: f32 = 0.0001;
 
   // Training params
   let snapshot_interval: u32 = 100;
-  let training_steps: u32 = 300;
-  let convergence_steps: u32 = 100;
-  let convergence_threshold: f32 = 0.000001;
+  let gamma: f32 = 0.03;
+  let alpha: f32 = 0.001;
+  let training_steps: u32 = 1000;
+  let convergence_steps: u32 = 50;
+  let convergence_threshold: f32 = 1e-4;
 
   // Build the model
   let mut model: PredictiveCodingModel = PredictiveCodingModel::new(
     &layer_sizes,
     gamma,
     alpha,
-    model_utils::ActivationFunction::Relu
+    model_utils::ActivationFunction::Sigmoid
   );
 
 

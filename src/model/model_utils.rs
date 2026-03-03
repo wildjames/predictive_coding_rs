@@ -28,6 +28,7 @@ pub fn load_model(filename: &str) -> PredictiveCodingModel {
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ActivationFunction {
   Relu,
+  Sigmoid,
 }
 
 impl ActivationFunction {
@@ -35,6 +36,7 @@ impl ActivationFunction {
   pub fn apply(&self, x: f32) -> f32 {
     match self {
       ActivationFunction::Relu => relu(x),
+      ActivationFunction::Sigmoid => sigmoid(x),
     }
   }
 
@@ -42,6 +44,7 @@ impl ActivationFunction {
   pub fn derivative(&self, x: f32) -> f32 {
     match self {
       ActivationFunction::Relu => relu_derivitive(x),
+      ActivationFunction::Sigmoid => sigmoid_derivitive(x),
     }
   }
 }
@@ -87,3 +90,11 @@ pub fn relu_derivitive(x: f32) -> f32 {
   }
 }
 
+/// Apply the sigmoid function
+pub fn sigmoid(x:f32) -> f32 {
+  1.0 / (1.0 + (-x).exp())
+}
+
+pub fn sigmoid_derivitive(x: f32) -> f32 {
+  (-x).exp() / (1.0 + (-x).exp()).powi(2)
+}
