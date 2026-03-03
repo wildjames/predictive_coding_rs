@@ -1,31 +1,43 @@
 {
-	"name": "PredictiveCodingRust",
-	// "image": "mcr.microsoft.com/devcontainers/rust:latest",
-	"build": {
-		"dockerfile": "Dockerfile",
-		"context": ".."
-	},
-	"remoteUser": "root",
-	"containerEnv": {
-		"DISPLAY": "${localEnv:DISPLAY}"
-	},
-	"mounts": [
-		"source=${env:HOME}${env:USERPROFILE}/.ssh,target=/root/.ssh,type=bind"
-	],
-	"postCreateCommand": "git config --global --add safe.directory /workspaces/PredictiveCodingRust",
-	"customizations": {
-		"vscode": {
-			"extensions": [
-				"rust-lang.rust-analyzer",
-				"vadimcn.vscode-lldb",
-				"dustypomerleau.rust-syntax",
-				"JScearcy.rust-doc-viewer",
-				"ZhangYue.rust-mod-generator",
-				"mooman219.rust-assist",
-				"jinxdash.prettier-rust",
-				"Zerotaskx.rust-extension-pack",
-				"mikestead.dotenv"
-			]
-		}
-	}
+  "name": "rust_project_jim_wild",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": "..",
+    "args": {
+      "DOCKER_GID": "${env:DOCKER_GID:}",
+      "USER_UID": "${localEnv:USER_ID:}",
+      "USER_GID": "${localEnv:GROUP_ID:}"
+    },
+    "updateRemoteUserUID": false
+  },
+  "mounts": [
+    "source=${env:HOME}${env:USERPROFILE}/.ssh,target=/home/vscode/.ssh,type=bind",
+    "source=${env:HOME}${env:USERPROFILE}/.gnupg,target=/home/vscode/.gnupg,type=bind"
+  ],
+  "containerEnv": {
+    "DISPLAY": "${localEnv:DISPLAY}"
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "github.vscode-pull-request-github",
+        "lfm.vscode-makefile-term",
+        "timonwong.shellcheck",
+        "mkhl.direnv",
+        "vadimcn.vscode-lldb",
+        "hastur-dev.cargo-fl",
+        "JScearcy.rust-doc-viewer"
+      ],
+      "settings": {
+        "editor.formatOnPaste": false,
+        "editor.formatOnType": false,
+        "editor.formatOnSave": true,
+        "editor.formatOnSaveMode": "file"
+      }
+    }
+  },
+  "remoteEnv": {
+    "LOCAL_WORKSPACE_FOLDER": "${localWorkspaceFolder}"
+  },
+  "features": {}
 }
