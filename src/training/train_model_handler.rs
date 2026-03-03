@@ -1,7 +1,10 @@
 //! Training orchestration for predictive coding models.
 
-use crate::model;
-use crate::data_handler;
+use crate::model::{
+  model::{PredictiveCodingModel},
+  model_utils::save_model
+};
+use crate::data_handling::data_handler;
 
 use std::sync::{Arc, mpsc};
 use std::pin::Pin;
@@ -20,23 +23,14 @@ use liveplot::{
   run_liveplot
 };
 
-use async_stream::try_stream;
 use tokio::sync::Mutex;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
 
 use futures_core::Stream;
 
-fn save_model(
-  model: &model::PredictiveCodingModel,
-  filename: &str
-) {
-  let model_ser = serde_json::to_string(&model).unwrap();
-  std::fs::write(filename, model_ser).unwrap();
-}
-
 fn set_input_and_output(
-  model: &mut model::PredictiveCodingModel,
+  model: &mut PredictiveCodingModel,
   data: &data_handler::ImagesBWDataset
 ) {
   let rand_index = usize::from_ne_bytes(rand::random()) % data.num_images;
@@ -61,7 +55,7 @@ fn set_input_and_output(
 
 /// Run inference to convergence on a single sample and update weights.
 fn train_sample(
-  model: &mut model::PredictiveCodingModel,
+  model: &mut PredictiveCodingModel,
   data: &data_handler::ImagesBWDataset,
   convergence_threshold: f32,
   convergence_steps: u32
@@ -75,15 +69,16 @@ fn train_sample(
 
 /// Train the model for a number of steps using randomly sampled data.
 pub fn train(
-  model: &mut model::PredictiveCodingModel,
+  model: &mut PredictiveCodingModel,
   data: &data_handler::ImagesBWDataset,
   training_steps: u32,
   convergence_steps: u32,
+  convergence_threshold: f32,
   snapshot_interval: u32,
-  convergence_threshold: f32
+  snapshot_output_prefix: &str
 ) {
   // Current timestamp
-  let fname_base: String = format!("data/model_snapshots_{}/model", chrono::Utc::now().timestamp());
+
 
   for step in 0..training_steps {
     train_sample(
@@ -106,7 +101,7 @@ pub fn train(
         step, error, energy,
       );
 
-      save_model(model, &format!("{}_step_{}.json", fname_base, step));
+      save_model(model, &format!("{}_step_{}.json", snapshot_output_prefix, step));
     }
   }
 
@@ -125,12 +120,14 @@ pub fn train(
 
 /// Train with a local live plot of model energy.
 pub fn train_plotting_local(
-  model: &mut model::PredictiveCodingModel,
+  model: &mut PredictiveCodingModel,
   data: &data_handler::ImagesBWDataset,
   training_steps: u32,
   convergence_steps: u32,
+  convergence_threshold: f32,
   snapshot_interval: u32,
-  convergence_threshold: f32) {
+  snapshot_output_prefix: &str
+) {
 
   let (sink, rx) = channel_plot();
   let trace = sink.create_trace("Model Energy", Some("Model Energy"));
@@ -138,8 +135,6 @@ pub fn train_plotting_local(
   // Run the dataset within a worker thread, since the plotter wants the main one.
   std::thread::scope(|s| {
     s.spawn(move || {
-      let fname_base: String = format!("data/snapshots/{}/model", chrono::Utc::now().timestamp());
-
       for step in 0..training_steps {
         train_sample(
           model,
@@ -167,7 +162,7 @@ pub fn train_plotting_local(
             step, error, energy,
           );
 
-            save_model(model, &format!("{}_{}.json", fname_base, step));
+            save_model(model, &format!("{}_{}.json", snapshot_output_prefix, step));
         }
       }
     });
@@ -200,20 +195,22 @@ pub fn train_plotting_local(
 
 #[derive(Clone)]
 struct TrainModelGrpcSvc {
-  model: Arc<Mutex<model::PredictiveCodingModel>>,
+  model: Arc<Mutex<PredictiveCodingModel>>,
   data: Arc<data_handler::ImagesBWDataset>,
   training_steps: u32,
   snapshot_interval: u32,
+  snapshot_output_prefix: String,
   convergence_steps: u32,
   convergence_threshold: f32,
 }
 
 impl TrainModelGrpcSvc {
   fn new(
-    model: model::PredictiveCodingModel,
+    model: PredictiveCodingModel,
     data: data_handler::ImagesBWDataset,
     training_steps: u32,
     snapshot_interval: u32,
+    snapshot_output_prefix: String,
     convergence_steps: u32,
     convergence_threshold: f32,
   ) -> Self {
@@ -222,6 +219,7 @@ impl TrainModelGrpcSvc {
       data: Arc::new(data),
       training_steps,
       snapshot_interval,
+      snapshot_output_prefix,
       convergence_steps,
       convergence_threshold,
     }
@@ -250,15 +248,17 @@ impl TrainModelGrpc for TrainModelGrpcSvc {
     &self,
     _request: Request<SubscribeEnergyRequest>,
   ) -> Result<Response<Self::SubscribeEnergyStreamStream>, Status> {
-    let model: Arc<Mutex<model::PredictiveCodingModel>> = Arc::clone(&self.model);
-    let data: Arc<data_handler::ImagesBWDataset> = Arc::clone(&self.data);
-    let snapshot_interval = self.snapshot_interval;
+    let model = Arc::clone(&self.model);
+    let data = Arc::clone(&self.data);
+
+    // I need to clone these so that the lifetimes are correct for the stream
     let training_steps = self.training_steps;
+    let snapshot_interval = self.snapshot_interval;
+    let snapshot_output_prefix = self.snapshot_output_prefix.clone();
     let convergence_steps = self.convergence_steps;
     let convergence_threshold = self.convergence_threshold;
 
-    let out = try_stream! {
-      let fname_base: String = format!("data/snapshots/{}/model", chrono::Utc::now().timestamp());
+    let out_stream = async_stream::try_stream! {
       for step in 0..training_steps {
         let (error, energy) = {
           let mut model_guard = model.lock().await;
@@ -279,7 +279,7 @@ impl TrainModelGrpc for TrainModelGrpcSvc {
               step, error, energy,
             );
 
-            save_model(&model_guard, &format!("{}_{}.json", fname_base, step));
+            save_model(&model_guard, &format!("{}_{}.json", snapshot_output_prefix, step));
           }
 
           (error, energy)
@@ -298,18 +298,19 @@ impl TrainModelGrpc for TrainModelGrpcSvc {
       }
     };
 
-    Ok(Response::new(Box::pin(out) as Self::SubscribeEnergyStreamStream))
+    Ok(Response::new(Box::pin(out_stream) as Self::SubscribeEnergyStreamStream))
   }
 }
 
 
 pub fn start_grpc_server_sync(
-  model: &mut model::PredictiveCodingModel,
+  model: &mut PredictiveCodingModel,
   data: &data_handler::ImagesBWDataset,
   training_steps: u32,
-  snapshot_interval: u32,
   convergence_steps: u32,
-  convergence_threshold: f32
+  convergence_threshold: f32,
+  snapshot_interval: u32,
+  snapshot_output_prefix: &str
 ) {
   let rt = tokio::runtime::Runtime::new().unwrap();
   rt.block_on(start_grpc_server(
@@ -317,6 +318,7 @@ pub fn start_grpc_server_sync(
     data.clone(),
     training_steps,
     snapshot_interval,
+    snapshot_output_prefix,
     convergence_steps,
     convergence_threshold
   )).unwrap();
@@ -324,10 +326,11 @@ pub fn start_grpc_server_sync(
 
 
 pub async fn start_grpc_server(
-  model: model::PredictiveCodingModel,
+  model: PredictiveCodingModel,
   data: data_handler::ImagesBWDataset,
   training_steps: u32,
   snapshot_interval: u32,
+  snapshot_output_prefix: &str,
   convergence_steps: u32,
   convergence_threshold: f32
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -337,6 +340,7 @@ pub async fn start_grpc_server(
     data,
     training_steps,
     snapshot_interval,
+    snapshot_output_prefix.to_string(),
     convergence_steps,
     convergence_threshold,
   );

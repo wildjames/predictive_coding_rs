@@ -1,4 +1,4 @@
-use predictive_coding::data_handler::{
+use predictive_coding::data_handling::data_handler::{
   load_mnist,
   output_image,
   ImagesBWDataset

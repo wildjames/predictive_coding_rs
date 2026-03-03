@@ -2,7 +2,7 @@
 //!
 //! Defines a layered model with local prediction errors and weight updates.
 
-use crate::model_utils::{self, ActivationFunction};
+use crate::model::model_utils::{ActivationFunction, outer_product};
 
 use serde::{Deserialize, Serialize};
 
@@ -143,7 +143,7 @@ impl Layer {
   fn update_weights(&mut self, alpha: f32, lower_layer: &Layer) {
     let activation_values: Array1<f32> = self.values.mapv(|x| self.activation_function.apply(x));
     // outer product yields (lower_size, upper_size)
-    let weight_changes: Array2<f32> = alpha * model_utils::outer_product(&lower_layer.errors, &activation_values);
+    let weight_changes: Array2<f32> = alpha * outer_product(&lower_layer.errors, &activation_values);
 
     self.weights += &weight_changes;
   }

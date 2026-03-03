@@ -1,12 +1,15 @@
 //! Training binary for the predictive coding model.
 
 use predictive_coding::{
-  data_handler,
-  model,
-  model_utils,
-  train_model_handler,
-  utils,
+  data_handling::data_handler,
+  model::{
+    model_utils,
+    model::{PredictiveCodingModel}
+  },
+  training::train_model_handler,
+  utils::logging
 };
+
 use tracing::info;
 
 
@@ -16,7 +19,7 @@ const DEFAULT_USE_LIVE_PLOT: bool = false;
 
 /// Entry point for loading data, building the model, and running training.
 fn main() {
-  utils::setup_tracing();
+  logging::setup_tracing();
 
   // Read environment variables
   let use_live_plot = std::env::var("USE_LIVE_PLOT")
@@ -51,12 +54,12 @@ fn main() {
 
   // Training params
   let snapshot_interval: u32 = 100;
-  let training_steps: u32 = 1000;
+  let training_steps: u32 = 300;
   let convergence_steps: u32 = 100;
   let convergence_threshold: f32 = 0.000001;
 
   // Build the model
-  let mut model: model::PredictiveCodingModel = model::PredictiveCodingModel::new(
+  let mut model: PredictiveCodingModel = PredictiveCodingModel::new(
     &layer_sizes,
     gamma,
     alpha,
@@ -89,14 +92,17 @@ fn main() {
     train_model_handler::train
   };
 
-   training_func(
-      &mut model,
-      &data,
-      training_steps,
-      convergence_steps,
-      snapshot_interval,
-      convergence_threshold
-   );
+  let fname_base: String = format!("data/model_snapshots_{}/model", chrono::Utc::now().timestamp());
+
+  training_func(
+    &mut model,
+    &data,
+    training_steps,
+    convergence_steps,
+    convergence_threshold,
+    snapshot_interval,
+    &fname_base,
+  );
 
   let model_error = model.read_total_error();
   info!(
@@ -110,6 +116,5 @@ fn main() {
     model_energy
   );
 
-  let model_ser = serde_json::to_string(&model).unwrap();
-  std::fs::write("data/models/model.json", model_ser).unwrap();
+  model_utils::save_model(&model, &format!("{}_{}", fname_base, "trained_model.json"));
 }

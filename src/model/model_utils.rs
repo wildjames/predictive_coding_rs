@@ -1,7 +1,23 @@
 //! Math utilities for predictive coding models.
 
+use crate::model::model::PredictiveCodingModel;
+
+use std::path::Path;
+
 use ndarray::{Array2, ArrayBase, Data, Dimension};
 use serde::{Deserialize, Serialize};
+
+pub fn save_model(
+  model: &PredictiveCodingModel,
+  filename: &str
+) {
+  if let Some(parent) = Path::new(filename).parent()
+    && !parent.as_os_str().is_empty() {
+      std::fs::create_dir_all(parent).unwrap();
+    }
+  let model_ser = serde_json::to_string(&model).unwrap();
+  std::fs::write(filename, model_ser).unwrap();
+}
 
 /// Activation function identifiers for serialization-friendly models.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]

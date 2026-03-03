@@ -2,13 +2,7 @@
 //!
 //! This crate exposes model components, training helpers, and data loaders.
 
-/// Predictive coding model definitions and training logic.
+pub mod data_handling;
 pub mod model;
-/// Math utilities used by model components.
-pub mod model_utils;
-/// Dataset loading and preprocessing helpers.
-pub mod data_handler;
-/// Training orchestration utilities for the predictive coding model.
-pub mod train_model_handler;
-/// Shared CLI utilities (logging, etc.).
+pub mod training;
 pub mod utils;
