@@ -1,7 +1,8 @@
-use predictive_coding::data_handling::data_handler::{
-  load_mnist,
-  image_utils::output_image,
-  ImagesBWDataset
+use predictive_coding::data_handling::{
+  data_handler::{
+    ImagesBWDataset, load_mnist
+  },
+  image_utils::output_image
 };
 
 fn main() {

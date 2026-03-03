@@ -5,7 +5,6 @@
 use crate::model::model_utils::{ActivationFunction, outer_product};
 
 use serde::{Deserialize, Serialize};
-
 use ndarray::{Array1, Array2};
 use rand::RngExt;
 
@@ -295,7 +294,7 @@ impl PredictiveCodingModel {
       let upper_layer: &mut Layer = &mut upper[0];
 
       // The last layer is handled differently.
-      if i == num_layers {
+      if i + 1 == num_layers - 1 {
         total_value_changes += upper_layer.values_timestep_top_level(self.gamma, lower_layer);
       } else {
         total_value_changes += upper_layer.values_timestep(self.gamma, Some(lower_layer));

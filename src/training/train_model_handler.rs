@@ -70,24 +70,17 @@ pub fn train(
 
     let error = model.read_total_error();
     let energy = model.read_total_energy();
-    debug!(
-      "Step {}\terror {}\tenergy {}",
+
+    info!(
+      "Step {:.1}\terror {:.1}\tenergy {:.1}",
       step, error, energy,
     );
 
-    let output_node_value = &model.layers.last().unwrap().values;
-    let output_node_prediction = &model.layers.last().unwrap().predictions;
-    for (i, (value, prediction)) in output_node_value.iter().zip(output_node_prediction.iter()).enumerate() {
-      debug!("Output node {}: value {}, prediction {}", i, value, prediction);
-    }
-
     if step % snapshot_interval == 0 {
-      info!(
-        "Step {}\terror {}\tenergy {}",
-        step, error, energy,
-      );
+      let oname = format!("{}_step_{}.json", snapshot_output_prefix, step);
+      info!("Saving model snapshot {}", oname);
 
-      save_model(model, &format!("{}_step_{}.json", snapshot_output_prefix, step));
+      save_model(model, &oname);
     }
   }
 
