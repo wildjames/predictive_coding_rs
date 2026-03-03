@@ -46,6 +46,17 @@ fn main() {
   let convergence_threshold: f32 = 1e-4;
   let activation_function: ActivationFunction = ActivationFunction::Relu;
 
+  info!(
+    "Training hyperparameters:\n\ttraining steps: {}\n\tconvergence steps: {}\n\tconvergence threshold: {}\n\tgamma: {}\n\talpha: {}\n\tactivation function: {:?}\n\tsnapshot interval: {}",
+    training_steps,
+    convergence_steps,
+    convergence_threshold,
+    gamma,
+    alpha,
+    activation_function,
+    snapshot_interval
+  );
+
   // Build the model
   let mut model: PredictiveCodingModel = PredictiveCodingModel::new(
     &layer_sizes,
