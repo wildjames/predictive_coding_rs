@@ -48,7 +48,7 @@ fn main() {
 
   model.set_input(input_values);
   model.unpin_output();
-  model.layers.last_mut().unwrap().values.fill(0.0);
+  model.randomise_output();
 
   model.converge_values_with_updates(0.000001, 1000);
 
@@ -57,6 +57,6 @@ fn main() {
     .iter()
     .enumerate()
     .for_each(|(i, &activation)| {
-      info!("Output node {}: activation {}", i, activation);
+      info!("Output node {}: activation {:.3}", i, activation);
     });
 }

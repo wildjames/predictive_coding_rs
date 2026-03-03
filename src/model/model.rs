@@ -197,6 +197,16 @@ impl PredictiveCodingModel {
     self.layers[0].pin_values(input_values);
   }
 
+  pub fn unpin_input(&mut self) {
+    self.layers[0].unpin_values();
+  }
+
+  pub fn randomise_input(&mut self) {
+    let input_layer = &mut self.layers[0];
+    let mut rng = rand::rng();
+    input_layer.values = Array1::from_shape_fn(input_layer.size, |_| rng.random_range(0.0..1.0));
+  }
+
   /// Set the values of the output layer to the given output values, and pins the output layer.
   pub fn set_output(&mut self, output_values: Array1<f32>) {
     self.layers.last_mut().unwrap().pin_values(output_values);
@@ -204,6 +214,12 @@ impl PredictiveCodingModel {
 
   pub fn unpin_output(&mut self) {
     self.layers.last_mut().unwrap().unpin_values();
+  }
+
+  pub fn randomise_output(&mut self) {
+    let output_layer = self.layers.last_mut().unwrap();
+    let mut rng = rand::rng();
+    output_layer.values = Array1::from_shape_fn(output_layer.size, |_| rng.random_range(0.0..1.0));
   }
 
   /// Evolves node values until convergence, recomputing predictions and errors each step.

@@ -7,7 +7,7 @@ use crate::model::{
 use crate::data_handling::data_handler;
 
 use ndarray::Array1;
-use tracing::{info, debug};
+use tracing::info;
 
 fn set_input_and_output(
   model: &mut PredictiveCodingModel,
