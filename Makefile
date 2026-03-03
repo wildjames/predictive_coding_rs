@@ -15,6 +15,9 @@ clean:
 train: build
 	cargo run --bin train
 
+infer: build
+	cargo run --bin infer
+
 monitor_training: build
 	cargo run --bin train_grpc_client
 

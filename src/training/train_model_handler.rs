@@ -91,13 +91,19 @@ pub fn train(
     let error = model.read_total_error();
     let energy = model.read_total_energy();
     debug!(
-      "Step {}, error {}, energy {}",
+      "Step {}\terror {}\tenergy {}",
       step, error, energy,
     );
 
+    let output_node_value = &model.layers.last().unwrap().values;
+    let output_node_prediction = &model.layers.last().unwrap().predictions;
+    for (i, (value, prediction)) in output_node_value.iter().zip(output_node_prediction.iter()).enumerate() {
+      debug!("Output node {}: value {}, prediction {}", i, value, prediction);
+    }
+
     if step % snapshot_interval == 0 {
       info!(
-        "Step {}, error {}, energy {}",
+        "Step {}\terror {}\tenergy {}",
         step, error, energy,
       );
 

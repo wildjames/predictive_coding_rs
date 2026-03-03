@@ -13,17 +13,18 @@ use rand::RngExt;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Layer {
   pub values: Array1<f32>, /// node activation values for this layer, x^l
-  predictions: Array1<f32>, //Predictions for the value of nodes in this layer, according to the layer above. u^l = f(x^{l+1}, w^{l+1})
-  errors: Array1<f32>, // Errors for this layer, e^l
-  weights: Array2<f32>, // weights to predict the layer below, w^l
-  pinned: bool, // If a layer is pinned, its values are not updated during time evolution (e.g. input layers in unsupervised learning, or input and output layers in supervised learning)
-  activation_function: ActivationFunction,
+  pub predictions: Array1<f32>, //Predictions for the value of nodes in this layer, according to the layer above. u^l = f(x^{l+1}, w^{l+1})
+  pub errors: Array1<f32>, // Errors for this layer, e^l
+  pub weights: Array2<f32>, // weights to predict the layer below, w^l
+  pub pinned: bool, // If a layer is pinned, its values are not updated during time evolution (e.g. input layers in unsupervised learning, or input and output layers in supervised learning)
+  pub activation_function: ActivationFunction,
   pub size: usize // The number of nodes in this layer, for easy reference. Should be the same as values.len(), predictions.len(), and errors.len()
 }
 
 impl Layer {
   /// Initialises a layer of the given size.
   /// Populates the values if given, and pins the layer against changing the values during compute iterations if specified.
+  /// If values are not given, they're set to random vlaues between 0 and 1
   /// Weights are randomly initialised, and predictions and errors are initialised to 0.0
   /// Takes ownership of the given values, if they are given, so that we can updated them in place later.
   fn new(
@@ -47,7 +48,7 @@ impl Layer {
       Some(lower) => (lower, size),
       None => (0, size),
     };
-    let weights = Array2::from_shape_fn(weights_shape, |_| rng.random::<f32>());
+    let weights = Array2::from_shape_fn(weights_shape, |_| rng.random_range(0.0..1.0));
 
     Layer {
       values,
@@ -64,6 +65,10 @@ impl Layer {
   fn pin_values(&mut self, values: Array1<f32>) {
     self.values = values;
     self.pinned = true;
+  }
+
+  fn unpin_values(&mut self) {
+    self.pinned = false;
   }
 
   /// Update the predictions for this layer based on the values of the layer above it.
@@ -196,6 +201,10 @@ impl PredictiveCodingModel {
   /// Set the values of the output layer to the given output values, and pins the output layer.
   pub fn set_output(&mut self, output_values: Array1<f32>) {
     self.layers.last_mut().unwrap().pin_values(output_values);
+  }
+
+  pub fn unpin_output(&mut self) {
+    self.layers.last_mut().unwrap().unpin_values();
   }
 
   /// Evolves node values until convergence, recomputing predictions and errors each step.

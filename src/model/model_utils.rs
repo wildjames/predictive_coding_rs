@@ -19,6 +19,11 @@ pub fn save_model(
   std::fs::write(filename, model_ser).unwrap();
 }
 
+pub fn load_model(filename: &str) -> PredictiveCodingModel {
+  let model_ser = std::fs::read_to_string(filename).unwrap();
+  serde_json::from_str(&model_ser).unwrap()
+}
+
 /// Activation function identifiers for serialization-friendly models.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ActivationFunction {

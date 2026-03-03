@@ -8,6 +8,10 @@ name = "train"
 path = "src/train.rs"
 
 [[bin]]
+name = "infer"
+path = "src/infer.rs"
+
+[[bin]]
 name = "train_grpc_client"
 path = "src/train_grpc_client.rs"
 
