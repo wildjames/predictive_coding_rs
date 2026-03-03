@@ -197,6 +197,10 @@ impl PredictiveCodingModel {
     self.layers[0].pin_values(input_values);
   }
 
+  pub fn pin_input(&mut self) {
+    self.layers[0].pinned = true;
+  }
+
   pub fn unpin_input(&mut self) {
     self.layers[0].unpin_values();
   }
@@ -210,6 +214,10 @@ impl PredictiveCodingModel {
   /// Set the values of the output layer to the given output values, and pins the output layer.
   pub fn set_output(&mut self, output_values: Array1<f32>) {
     self.layers.last_mut().unwrap().pin_values(output_values);
+  }
+
+  pub fn pin_output(&mut self) {
+    self.layers.last_mut().unwrap().pinned = true;
   }
 
   pub fn unpin_output(&mut self) {

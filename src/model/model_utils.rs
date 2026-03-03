@@ -98,3 +98,44 @@ pub fn sigmoid(x:f32) -> f32 {
 pub fn sigmoid_derivitive(x: f32) -> f32 {
   (-x).exp() / (1.0 + (-x).exp()).powi(2)
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn assert_within_tol(expected: f32, actual: f32, tol: f32) {
+    assert!(
+      (expected - actual).abs() < tol,
+      "Expected {}, got {}, which is outside the tolerance of {}",
+      expected,
+      actual,
+      tol
+    );
+  }
+
+  #[test]
+  fn test_sigmoid() {
+    let x = 0.5;
+    let expected = 0.622459;
+    let actual = sigmoid(x);
+    assert_within_tol(expected, actual, 1e-6);
+
+    let x = -0.5;
+    let expected = 0.377541;
+    let actual = sigmoid(x);
+    assert_within_tol(expected, actual, 1e-6);
+  }
+
+  #[test]
+  fn test_sigmoid_derivative() {
+    let x = 0.5;
+    let expected = 0.235004;
+    let actual = sigmoid_derivitive(x);
+    assert_within_tol(expected, actual, 1e-6);
+
+    let x = -0.5;
+    let expected = 0.235004;
+    let actual = sigmoid_derivitive(x);
+    assert_within_tol(expected, actual, 1e-6);
+  }
+}

@@ -3,7 +3,7 @@
 use predictive_coding::{
   data_handling::data_handler,
   model::{
-    model_utils,
+    model_utils::{ActivationFunction, save_model},
     model::{PredictiveCodingModel}
   },
   training::train_model_handler,
@@ -32,7 +32,6 @@ fn main() {
   let layer_sizes: Vec<usize> = vec![
     input_layer_size,
     256,
-    128,
     64,
     output_layer_size
   ];
@@ -45,13 +44,14 @@ fn main() {
   let training_steps: u32 = 1000;
   let convergence_steps: u32 = 50;
   let convergence_threshold: f32 = 1e-4;
+  let activation_function: ActivationFunction = ActivationFunction::Relu;
 
   // Build the model
   let mut model: PredictiveCodingModel = PredictiveCodingModel::new(
     &layer_sizes,
     gamma,
     alpha,
-    model_utils::ActivationFunction::Sigmoid
+    activation_function
   );
 
 
@@ -92,5 +92,5 @@ fn main() {
     model_energy
   );
 
-  model_utils::save_model(&model, &format!("{}_{}", fname_base, "trained_model.json"));
+  save_model(&model, &format!("{}_{}", fname_base, "final.json"));
 }

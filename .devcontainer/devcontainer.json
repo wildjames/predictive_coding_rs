@@ -23,7 +23,6 @@
         "github.vscode-pull-request-github",
         "lfm.vscode-makefile-term",
         "timonwong.shellcheck",
-        "mkhl.direnv",
         "vadimcn.vscode-lldb",
         "hastur-dev.cargo-fl",
         "JScearcy.rust-doc-viewer"

@@ -11,6 +11,10 @@ path = "src/train.rs"
 name = "infer"
 path = "src/infer.rs"
 
+[[bin]]
+name = "generate"
+path = "src/generate.rs"
+
 [[example]]
 name = "test-load-data"
 path = "examples/test_load_data.rs"

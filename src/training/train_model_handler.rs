@@ -72,7 +72,7 @@ pub fn train(
     let energy = model.read_total_energy();
 
     info!(
-      "Step {:.1}\terror {:.1}\tenergy {:.1}",
+      "Sample {:.1}\terror {:.1}\tenergy {:.1}",
       step, error, energy,
     );
 

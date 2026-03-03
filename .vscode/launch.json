@@ -5,6 +5,20 @@
   "version": "0.2.0",
   "configurations": [
     {
+      "name": "Debug executable 'generate'",
+      "type": "lldb",
+      "request": "launch",
+      "cargo": {
+        "args": [
+          "run",
+          "--bin=generate"
+        ]
+      },
+      "args": [
+        "data/model_"
+      ]
+    },
+    {
       "name": "Debug executable 'infer'",
       "type": "lldb",
       "request": "launch",
