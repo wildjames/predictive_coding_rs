@@ -13,21 +13,9 @@ use predictive_coding::{
 use tracing::info;
 
 
-/// Default value for enabling live plotting via environment variable.
-const DEFAULT_USE_LIVE_PLOT: bool = false;
-
-
 /// Entry point for loading data, building the model, and running training.
 fn main() {
   logging::setup_tracing();
-
-  // Read environment variables
-  let use_live_plot = std::env::var("USE_LIVE_PLOT")
-    .map(|val| val == "true")
-    .unwrap_or(DEFAULT_USE_LIVE_PLOT);
-  let use_grpc_plot = std::env::var("USE_GRPC_PLOT")
-    .map(|val| val == "true")
-    .unwrap_or(false);
 
   let data: data_handler::ImagesBWDataset = data_handler::load_mnist(
       "data/mnist/train-images-idx3-ubyte",
@@ -79,19 +67,7 @@ fn main() {
     model_energy
   );
 
-  let training_func = if use_live_plot {
-    if use_grpc_plot {
-      info!("Using gRPC plotting - starting a server for live plotting during training");
-      train_model_handler::start_grpc_server_sync
-    } else {
-      info!("Using live plotting during training");
-      train_model_handler::train_plotting_local
-    }
-  } else {
-    info!("Training without live plotting");
-    train_model_handler::train
-  };
-
+  let training_func = train_model_handler::train;
   let fname_base: String = format!("data/model_snapshots_{}/model", chrono::Utc::now().timestamp());
 
   training_func(

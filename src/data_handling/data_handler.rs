@@ -6,8 +6,6 @@ use std::fs::File;
 use std::io::{self, Read, BufReader};
 use std::path::Path;
 
-use image::{GrayImage};
-
 use ndarray::{Array1, Array2, s};
 
 // Homebrew IDX reader, since it's a simple format and I don't want to add a dependency.
@@ -113,27 +111,4 @@ pub fn load_mnist<P: AsRef<Path>>(images_path: P, labels_path: P) -> io::Result<
       image_width: images_idx.dimensions[2],
     }
   )
-}
-
-/// Write a single dataset image to disk as a grayscale PNG.
-#[allow(dead_code)]
-pub fn output_image<P: AsRef<Path>>(
-  data: &ImagesBWDataset,
-  index: usize,
-  output_path: P
-) -> image::ImageResult<GrayImage> {
-
-  let image_data = data.images.row(index).to_vec();
-  let width = data.image_width;
-  let height = data.image_height;
-  let img = GrayImage::from_raw(width, height, image_data.to_vec())
-    .expect("Failed to create image");
-
-  // Ensure that the output directory exists
-  if let Some(parent) = output_path.as_ref().parent() {
-    std::fs::create_dir_all(parent)?;
-  }
-
-  img.save(output_path)?;
-  Ok(img)
 }

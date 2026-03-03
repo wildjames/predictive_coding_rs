@@ -1,6 +1,6 @@
 use predictive_coding::data_handling::data_handler::{
   load_mnist,
-  output_image,
+  image_utils::output_image,
   ImagesBWDataset
 };
 
