@@ -18,7 +18,7 @@ use clap::Parser;
 
 #[derive(Parser)]
 struct BenchArgs {
-  /// The model file to benchmark. If it doesn't exist, a new model will be created with the same architecture as the MNIST model and random weights, and saved to this path for future use
+  /// The model configuration to benchmark.
   #[arg(short, long, default_value_t = String::from("benchmark_data/model_config.json"))]
   config: String,
 }
@@ -29,7 +29,6 @@ fn main() {
   let args = BenchArgs::parse();
 
   // Run a benchmark model. Random input and output data, inputs are pinned
-  // And we run for 50 convergence steps, tolerance of 0.0 (i.e. run for all 50 steps)
   let config: &String = &args.config;
   let mut model = create_from_config(config);
 

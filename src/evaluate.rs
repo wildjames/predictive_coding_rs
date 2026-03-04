@@ -1,9 +1,10 @@
 use tracing::{info};
 use ndarray::Array1;
+use std::time::Instant;
 
 use predictive_coding::{
   data_handling::data_handler,
-  model::model_utils::{load_model},
+  model::model_utils::{create_from_config},
   utils::logging
 };
 
@@ -23,7 +24,7 @@ fn main() {
 
   let args = EvalArgs::parse();
 
-  let mut model = load_model(&args.model_file);
+  let mut model = create_from_config(&args.model_file);
   info!("Loaded model from {}", args.model_file);
 
 
@@ -43,6 +44,7 @@ fn main() {
   let mut correct_predictions: usize = 0;
   let mut total_predictions: usize = 0;
   let mut confidence_sum: f32 = 0.0;
+  let mut sum_covnvergence_time: f32 = 0.0;
 
   for i in 0..data.num_images {
     let input_values: Array1<f32> = data.images
@@ -54,7 +56,9 @@ fn main() {
 
     model.reinitialise_latents();
     model.set_input(input_values);
+    let start_time = Instant::now();
     model.converge_values_with_updates();
+    let elapsed_time = start_time.elapsed();
 
     let output_activations = model.get_output();
     let predicted_label = output_activations
@@ -77,29 +81,36 @@ fn main() {
       confidence_sum += output_activations[predicted_label];
     }
     total_predictions += 1;
+    sum_covnvergence_time += elapsed_time.as_millis() as f32;
   }
 
   let accuracy = correct_predictions as f32 / total_predictions as f32;
+  let mean_convergence_time = sum_covnvergence_time / total_predictions as f32;
   let mean_confidence = if correct_predictions > 0 {
-    confidence_sum / correct_predictions as f32
+  confidence_sum / correct_predictions as f32
   } else {
     0.0
   };
+
   info!(
-    "Evaluation complete. Accuracy: {:.2}%. When correct, average confidence: {:.3}",
+    "Evaluation complete. Accuracy: {:.2}%, convergence time on average is {:.0}ms When correct, average confidence: {:.3}",
     accuracy * 100.0,
+    mean_convergence_time,
     mean_confidence
   );
   // Write to a file in the model directory
   let output_dir = std::path::Path::new(&args.model_file).parent().unwrap();
-  let output_path = output_dir.join("evaluation_results.txt");
+  let output_path = output_dir.join("evaluation_results.json");
   serde_json::to_writer_pretty(
     std::fs::File::create(output_path).unwrap(),
     &serde_json::json!({
       "accuracy": accuracy,
+      "mean_convergence_time_ms": mean_convergence_time,
       "mean_confidence_when_correct": mean_confidence,
       "correct_predictions": correct_predictions,
       "total_predictions": total_predictions,
+      "model_file": args.model_file,
+      "config": model.get_config(),
     }),
   ).unwrap();
 }

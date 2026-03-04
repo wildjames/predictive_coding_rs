@@ -41,8 +41,7 @@ fn main() {
   let args = TrainArgs::parse();
 
   // Assert that we have only config or snapshot
-  if (args.config.is_some() && args.snapshot.is_some())
-    || (args.config.is_none() && args.snapshot.is_none()) {
+  if args.config.is_some() == args.snapshot.is_some() {
     panic!("Exactly one of --config and --snapshot must be provided");
   }
 
