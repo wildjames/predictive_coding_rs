@@ -9,7 +9,7 @@ use crate::data_handling::data_handler;
 use ndarray::Array1;
 use tracing::info;
 
-fn set_input_and_output(
+fn set_rand_input_and_output(
   model: &mut PredictiveCodingModel,
   data: &data_handler::ImagesBWDataset
 ) {
@@ -51,14 +51,18 @@ pub fn train(
   snapshot_interval: u32,
   snapshot_output_prefix: &str
 ) {
+  // Supervised learning
+  model.pin_input();
+  model.pin_output();
+
   for step in 0..training_steps {
-    set_input_and_output(model, data);
+    set_rand_input_and_output(model, data);
     train_and_update_model(model);
 
-    let error = model.read_total_error();
-    let energy = model.read_total_energy();
 
     if step % report_interval == 0 {
+      let error = model.read_total_error();
+      let energy = model.read_total_energy();
       info!(
         "Sample {:.1}\terror {:.1}\tenergy {:.1}",
         step, error, energy,

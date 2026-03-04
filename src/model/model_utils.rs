@@ -51,6 +51,7 @@ pub fn load_model(filename: &str) -> PredictiveCodingModel {
 pub enum ActivationFunction {
   Relu,
   Sigmoid,
+  Tanh
 }
 
 impl ActivationFunction {
@@ -59,6 +60,7 @@ impl ActivationFunction {
     match self {
       ActivationFunction::Relu => relu(x),
       ActivationFunction::Sigmoid => sigmoid(x),
+      ActivationFunction::Tanh => tanh(x),
     }
   }
 
@@ -67,6 +69,7 @@ impl ActivationFunction {
     match self {
       ActivationFunction::Relu => relu_derivitive(x),
       ActivationFunction::Sigmoid => sigmoid_derivitive(x),
+      ActivationFunction::Tanh => tanh_derivative(x),
     }
   }
 }
@@ -119,6 +122,15 @@ pub fn sigmoid(x:f32) -> f32 {
 
 pub fn sigmoid_derivitive(x: f32) -> f32 {
   (-x).exp() / (1.0 + (-x).exp()).powi(2)
+}
+
+// Apply tanh
+pub fn tanh(x: f32) -> f32 {
+  x.tanh()
+}
+
+pub fn tanh_derivative(x: f32) -> f32 {
+  4.0 / ( (-x).exp() + x.exp()).powi(2)
 }
 
 #[cfg(test)]

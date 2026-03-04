@@ -27,14 +27,15 @@ fn main() {
   );
 
   // Training params
-  let report_interval: u32 = 100;
-  let snapshot_interval: u32 = 10000;
-  let training_steps: u32 = data.num_images as u32; // full dataset
+  let report_interval: u32 = 1_000;
+  let snapshot_interval: u32 = 30_000;
+  let training_steps: u32 = (data.num_images * 2) as u32;
   let convergence_steps: u32 = 50;
   let convergence_threshold: f32 = 1e-5;
 
   info!(
-    "Training hyperparameters:\n\tconvergence steps: {}\n\tconvergence threshold: {}\n\tsnapshot interval: {}",
+    "Training hyperparameters:\n\ttraining steps: {}\n\tconvergence steps: {}\n\tconvergence threshold: {}\n\tsnapshot interval: {}",
+    training_steps,
     convergence_steps,
     convergence_threshold,
     snapshot_interval
@@ -44,15 +45,17 @@ fn main() {
   let fname: &str = "data/model_config.json";
   let mut model: PredictiveCodingModel = create_from_config(fname);
 
+  let config = model.get_config();
   info!(
-    "Model architecture: {:?}\n\tgamma: {}\n\talpha: {}",
-    model.get_layer_sizes(),
-    model.get_gamma(),
-    model.get_alpha()
+    "Model architecture:\n\tlayer sizes: {:?}\n\tgamma: {}\n\talpha: {}\n\tactivation function: {:?}",
+    config.layer_sizes,
+    config.gamma,
+    config.alpha,
+    config.activation_function,
   );
 
   let snapshot_output_prefix: String = format!(
-    "data/model_snapshots_{}/model",
+    "data/model_{}/model",
     chrono::Utc::now().timestamp()
   );
   // Write the config to a file

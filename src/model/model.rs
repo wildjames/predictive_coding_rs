@@ -73,7 +73,7 @@ impl Layer {
     self.weights = Array2::from_shape_fn(self.weights.dim(), |_| rng.random_range(-self.xavier_limit..self.xavier_limit));
   }
 
-  pub fn randomise_values(&mut self, mut rng: rand::prelude::ThreadRng) {
+  pub fn randomise_values(&mut self, rng: &mut rand::prelude::ThreadRng) {
     self.values = Array1::from_shape_fn(self.values.len(), |_| rng.random_range(0.0..1.0));
   }
 
@@ -259,6 +259,10 @@ impl PredictiveCodingModel {
     self.gamma
   }
 
+  pub fn get_activation_function(&self) -> ActivationFunction {
+    self.layers.first().unwrap().activation_function
+  }
+
   /// Set the values of the input layer to the given input values, and pin the input layer.
   pub fn get_input(&self) -> &Array1<f32> {
     &self.layers[0].values
@@ -309,10 +313,10 @@ impl PredictiveCodingModel {
   /// Should be called before each new training sample to avoid carrying over
   /// converged state from a previous sample.
   pub fn reinitialise_latents(&mut self) {
-    let rng = rand::rng();
+    let mut rng = rand::rng();
     for layer in &mut self.layers {
       if !layer.pinned {
-        layer.randomise_values(rng.clone());
+        layer.randomise_values(&mut rng);
       }
     }
   }

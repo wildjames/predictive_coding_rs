@@ -23,3 +23,5 @@ I have, at the time of writing, got a model architecture that converges on a rou
 	- [ ] Show a graph or something in github pages?
 - [ ] Plotting model training (make a separate binary that monitors test output)
 	- [ ] `egui`? `plotters`?
+- [ ] Visualiser for model state - a graph with connections and nodes
+	- Nodes could be two circles, one red one blue, each scaled to activation

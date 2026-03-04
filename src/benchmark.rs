@@ -59,7 +59,6 @@ fn main() {
   let convergence_steps: u32 = 50;
   let convergence_threshold: f32 = 0.0;
 
-
   info!(
     "Benchmarking hyperparameters:\n\ttraining steps: {}\n\tconvergence steps: {}\n\tconvergence threshold: {}",
     training_steps,
@@ -79,6 +78,7 @@ fn main() {
 
   let params = serde_json::json!({
     "git_commit_hash": current_commit_hash_str,
+    "run_timestamp": chrono::Utc::now().to_rfc3339(),
     "training_steps": training_steps,
     "convergence_steps": convergence_steps,
     "convergence_threshold": convergence_threshold,
@@ -107,16 +107,18 @@ pub fn benchmark(
   let mut wtr = csv::Writer::from_path(bench_run_outfile).unwrap();
   wtr.write_record(["step", "time_ms"]).unwrap();
 
+  model.pin_input();
+  model.pin_output();
   for step in 0..training_steps {
-    let start_time: Instant = Instant::now();
 
     // Set random input and output data for the model
     model.randomise_input();
     model.randomise_output();
 
+    let start_time: Instant = Instant::now();
     train_model_handler::train_and_update_model(model);
-
     let elapsed_time = start_time.elapsed();
+
     let elapsed_time_ms = elapsed_time.as_secs_f32() * 1000.0;
 
     wtr.write_record(&[
