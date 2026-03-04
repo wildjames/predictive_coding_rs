@@ -2,7 +2,15 @@ use std::time::Instant;
 
 use predictive_coding::{
   model::{
-    model::PredictiveCodingModel, model_utils::{ActivationFunction, load_model, save_model}
+    model::{
+      PredictiveCodingModel,
+      PredictiveCodingModelConfig
+    },
+    model_utils::{
+      ActivationFunction,
+      load_model,
+      save_model
+    }
   },
   training::train_model_handler,
   utils::logging
@@ -16,8 +24,8 @@ fn main() {
 
   // Run a benchmark model. Random input and output data, inputs are pinned
   // And we run for 50 convergence steps, tolerance of 0.0 (i.e. run for all 50 steps)
-  let model_fname = "benchmark_data/initial_model.json";
-  let create_model = !std::path::Path::new(model_fname).exists();
+  let model_fname: &str = "benchmark_data/initial_model.json";
+  let create_model: bool = !std::path::Path::new(model_fname).exists();
 
   let mut model = if create_model {
     info!("No existing model found at {}, creating a new one for benchmarking", model_fname);
@@ -30,24 +38,21 @@ fn main() {
     ];
 
     // Training params
-    let gamma: f32 = 0.1;
-    let alpha: f32 = 0.001;
-    let activation_function: ActivationFunction = ActivationFunction::Relu;
-
-    let new_model = PredictiveCodingModel::new(
-      &layer_sizes,
-      gamma,
-      alpha,
-      activation_function
-    );
+    let config: PredictiveCodingModelConfig = PredictiveCodingModelConfig {
+      layer_sizes,
+      alpha: 0.001,
+      gamma: 0.1,
+      convergence_steps: 50,
+      convergence_threshold: 0.0,
+      activation_function: ActivationFunction::Relu
+    };
+    let new_model: PredictiveCodingModel = PredictiveCodingModel::new(&config);
     save_model(&new_model, model_fname);
     new_model
   } else {
     info!("Loading existing model from {} for benchmarking", model_fname);
     load_model(model_fname)
   };
-
-  info!("Are the model's input and output pinned? {} {}", model.layers.first().unwrap().pinned, model.layers.last().unwrap().pinned);
 
   // Training params
   let training_steps: u32 = 100;
@@ -85,8 +90,6 @@ fn main() {
   benchmark(
     &mut model,
     training_steps,
-    convergence_steps,
-    convergence_threshold,
     &format!("{}{}", output_prefix, "/bench_run.csv")
   );
 
@@ -95,8 +98,6 @@ fn main() {
 pub fn benchmark(
   model: &mut PredictiveCodingModel,
   training_steps: u32,
-  convergence_steps: u32,
-  convergence_threshold: f32,
   bench_run_outfile: &str
 ) {
   // Create the output directory if it doesn't exist
@@ -113,11 +114,7 @@ pub fn benchmark(
     model.randomise_input();
     model.randomise_output();
 
-    train_model_handler::train_and_update_model(
-      model,
-      convergence_threshold,
-      convergence_steps
-    );
+    train_model_handler::train_and_update_model(model);
 
     let elapsed_time = start_time.elapsed();
     let elapsed_time_ms = elapsed_time.as_secs_f32() * 1000.0;

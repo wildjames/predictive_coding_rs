@@ -24,7 +24,7 @@ fn set_input_and_output(
   // One-hot output row with label value set to 1.0
   let output_label: usize = data.labels[rand_index] as usize;
 
-  let output_layer_size = model.layers.last().unwrap().size;
+  let output_layer_size: usize = *model.get_layer_sizes().last().unwrap();
   let mut output_values: Array1<f32> = Array1::zeros(output_layer_size);
   output_values[output_label] = 1.0;
 
@@ -34,14 +34,10 @@ fn set_input_and_output(
 }
 
 /// Run inference to convergence on a single sample and update weights.
-pub fn train_and_update_model(
-  model: &mut PredictiveCodingModel,
-  convergence_threshold: f32,
-  convergence_steps: u32
-) {
+pub fn train_and_update_model(model: &mut PredictiveCodingModel) {
   model.reinitialise_latents();
   // Train on this example until convergence.
-  model.converge_values_with_updates(convergence_threshold, convergence_steps);
+  model.converge_values_with_updates();
   model.update_weights();
 }
 
@@ -51,26 +47,23 @@ pub fn train(
   model: &mut PredictiveCodingModel,
   data: &data_handler::ImagesBWDataset,
   training_steps: u32,
-  convergence_steps: u32,
-  convergence_threshold: f32,
+  report_interval: u32,
   snapshot_interval: u32,
   snapshot_output_prefix: &str
 ) {
   for step in 0..training_steps {
     set_input_and_output(model, data);
-    train_and_update_model(
-      model,
-      convergence_threshold,
-      convergence_steps
-    );
+    train_and_update_model(model);
 
     let error = model.read_total_error();
     let energy = model.read_total_energy();
 
-    info!(
-      "Sample {:.1}\terror {:.1}\tenergy {:.1}",
-      step, error, energy,
-    );
+    if step % report_interval == 0 {
+      info!(
+        "Sample {:.1}\terror {:.1}\tenergy {:.1}",
+        step, error, energy,
+      );
+    }
 
     if step % snapshot_interval == 0 {
       let oname = format!("{}_step_{}.json", snapshot_output_prefix, step);

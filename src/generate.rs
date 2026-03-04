@@ -38,15 +38,15 @@ fn main() {
   model.set_output(output_values);
   model.pin_output();
 
-  info!("Is the input pinned? {}", model.layers.first().unwrap().pinned);
-  info!("Is the output pinned? {}", model.layers.last().unwrap().pinned);
+  info!("Is the input pinned? {}", model.get_layers().first().unwrap().pinned);
+  info!("Is the output pinned? {}", model.get_layers().last().unwrap().pinned);
 
-  model.converge_values_with_updates(1e-4, 50);
+  model.converge_values_with_updates();
 
   let output_path = format!("{}_gen_{}.png", model_fname, output_label);
   println!("Saving generated image to {}", output_path);
 
-  let image_data = model.layers.first().unwrap().values.map(|&x| (x * 255.0) as u8).to_vec();
+  let image_data = model.get_layer(0).values.map(|&x| (x * 255.0) as u8).to_vec();
 
   let img = GrayImage::from_raw(
     28,

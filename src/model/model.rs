@@ -182,9 +182,21 @@ impl Layer {
 /// A multi-layer predictive coding model with value and weight updates.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PredictiveCodingModel {
-  pub layers: Vec<Layer>,
-  pub gamma: f32, // neural learning rate
-  pub alpha: f32, // synaptic learning rate
+  layers: Vec<Layer>,
+  alpha: f32, // synaptic learning rate
+  gamma: f32, // neural learning rate
+  convergence_threshold: f32,
+  convergence_steps: u32,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct PredictiveCodingModelConfig {
+  pub layer_sizes: Vec<usize>,
+  pub alpha: f32,
+  pub gamma: f32,
+  pub convergence_threshold: f32,
+  pub convergence_steps: u32,
+  pub activation_function: ActivationFunction,
 }
 
 impl PredictiveCodingModel {
@@ -193,19 +205,15 @@ impl PredictiveCodingModel {
   /// alpha is the synaptic learning rate, which controls how much the weights are updated after each inference step.
   /// gamma is the neural learning rate, which controls how much the node values are updated during inference.
   /// activation_function is applied to the node values when computing predictions for the layer below.
-  pub fn new(
-    layer_sizes: &[usize],
-    gamma: f32,
-    alpha: f32,
-    activation_function: ActivationFunction
-) -> Self {
+  pub fn new(config: &PredictiveCodingModelConfig) -> Self {
     let mut layers = Vec::new();
-    for (index, layer_size) in layer_sizes.iter().enumerate() {
-      let lower_size = if index == 0 { None } else { Some(layer_sizes[index - 1]) };
+    for (index, layer_size) in config.layer_sizes.iter().enumerate() {
+      let lower_size = if index == 0 { None } else { Some(config.layer_sizes[index - 1]) };
+
       layers.push(Layer::new(
         *layer_size,
         lower_size,
-        activation_function,
+        config.activation_function,
         None,
         None
       ));
@@ -213,12 +221,49 @@ impl PredictiveCodingModel {
 
     PredictiveCodingModel {
       layers,
-      gamma,
-      alpha,
+      alpha: config.alpha,
+      gamma: config.gamma,
+      convergence_threshold: config.convergence_threshold,
+      convergence_steps: config.convergence_steps,
     }
   }
 
+  pub fn get_config(&self) -> PredictiveCodingModelConfig {
+    PredictiveCodingModelConfig {
+      layer_sizes: self.layers.iter().map(|l| l.size).collect(),
+      alpha: self.alpha,
+      gamma: self.gamma,
+      convergence_steps: self.convergence_steps,
+      convergence_threshold: self.convergence_threshold,
+      activation_function: self.layers.first().unwrap().activation_function, // Assuming all layers have the same activation function
+    }
+  }
+
+  pub fn get_layers(&self) -> &Vec<Layer> {
+    &self.layers
+  }
+
+  pub fn get_layer(&self, index: usize) -> &Layer {
+    &self.layers[index]
+  }
+
+  pub fn get_layer_sizes(&self) -> Vec<usize> {
+    self.layers.iter().map(|l| l.size).collect()
+  }
+
+  pub fn get_alpha(&self) -> f32 {
+    self.alpha
+  }
+
+  pub fn get_gamma(&self) -> f32 {
+    self.gamma
+  }
+
   /// Set the values of the input layer to the given input values, and pin the input layer.
+  pub fn get_input(&self) -> &Array1<f32> {
+    &self.layers[0].values
+  }
+
   pub fn set_input(&mut self, input_values: Array1<f32>) {
     self.layers[0].pin_values(input_values);
   }
@@ -238,6 +283,10 @@ impl PredictiveCodingModel {
   }
 
   /// Set the values of the output layer to the given output values, and pins the output layer.
+  pub fn get_output(&self) -> &Array1<f32> {
+    &self.layers.last().unwrap().values
+  }
+
   pub fn set_output(&mut self, output_values: Array1<f32>) {
     self.layers.last_mut().unwrap().pin_values(output_values);
   }
@@ -270,20 +319,16 @@ impl PredictiveCodingModel {
 
   /// Evolves node values until convergence, recomputing predictions and errors each step.
   /// Returns the number of steps taken and the per-step delta values.
-  pub fn converge_values_with_updates(
-    &mut self,
-    convergence_threshold: f32,
-    convergence_steps: u32
-  ) -> (u32, Vec::<f32>) {
+  pub fn converge_values_with_updates(&mut self) -> (u32, Vec::<f32>) {
     let mut converged: bool = false;
     let mut convergence_count: u32 = 0;
 
     let mut value_changes: Vec<f32> = vec![];
-    while !converged && (convergence_count < convergence_steps) {
+    while !converged && (convergence_count < self.convergence_steps) {
       self.compute_predictions_and_errors();
       value_changes.push(self.timestep());
 
-      if value_changes.last().unwrap().abs() < convergence_threshold {
+      if value_changes.last().unwrap().abs() < self.convergence_threshold {
         converged = true;
       }
       convergence_count += 1;

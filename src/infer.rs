@@ -50,9 +50,9 @@ fn main() {
   model.unpin_output();
   model.randomise_output();
 
-  model.converge_values_with_updates(1e-4, 50);
+  model.converge_values_with_updates();
 
-  let output_activations = model.layers.last().unwrap().values.clone();
+  let output_activations = model.get_output();
   let predicted_label = output_activations
     .iter()
     .enumerate()
