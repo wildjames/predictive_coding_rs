@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use predictive_coding::{
   model::{
-    model::PredictiveCodingModel, model_utils::load_model
+    model::PredictiveCodingModel, model_utils::{ActivationFunction, load_model, save_model}
   },
   training::train_model_handler,
   utils::logging
@@ -16,7 +16,36 @@ fn main() {
 
   // Run a benchmark model. Random input and output data, inputs are pinned
   // And we run for 50 convergence steps, tolerance of 0.0 (i.e. run for all 50 steps)
-  let mut model = load_model("benchmark_data/initial_model.json");
+  let model_fname = "benchmark_data/initial_model.json";
+  let create_model = !std::path::Path::new(model_fname).exists();
+
+  let mut model = if create_model {
+    info!("No existing model found at {}, creating a new one for benchmarking", model_fname);
+    // Model params similar to mnist data for benchmarking.
+    let layer_sizes: Vec<usize> = vec![
+      28*28,
+      256,
+      64,
+      10
+    ];
+
+    // Training params
+    let gamma: f32 = 0.1;
+    let alpha: f32 = 0.001;
+    let activation_function: ActivationFunction = ActivationFunction::Relu;
+
+    let new_model = PredictiveCodingModel::new(
+      &layer_sizes,
+      gamma,
+      alpha,
+      activation_function
+    );
+    save_model(&new_model, model_fname);
+    new_model
+  } else {
+    info!("Loading existing model from {} for benchmarking", model_fname);
+    load_model(model_fname)
+  };
 
   info!("Are the model's input and output pinned? {} {}", model.layers.first().unwrap().pinned, model.layers.last().unwrap().pinned);
 
