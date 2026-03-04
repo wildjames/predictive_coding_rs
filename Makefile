@@ -1,4 +1,4 @@
-.PHONY: grab-mnist
+.PHONY: grab-mnist build test clean train infer bench gen
 
 grab-mnist:
 	./scripts/grab_mnist.sh
@@ -13,7 +13,13 @@ clean:
 	cargo clean
 
 train: build
-	cargo run --bin train
+	cargo run --release --bin train
 
 infer: build
-	cargo run --bin infer
+	cargo run --release --bin infer $(MODEL)
+
+gen: build
+	cargo run --release --bin generate $(MODEL) $(NUMBER)
+
+bench: build
+	cargo run --release --bin bench
