@@ -350,13 +350,13 @@ impl PredictiveCodingModel {
 
     // the update of a node value depends on the errors of the layer below it.
     let num_layers: usize = self.layers.len();
-    for i in 0..num_layers - 1 {
+    for i in 0..num_layers - 1 { // in rust, the range is exclusive of the upper bound
       let (lower, upper) = self.layers.split_at_mut(i + 1);
       let lower_layer: &Layer = &lower[i];
       let upper_layer: &mut Layer = &mut upper[0];
 
       // The last layer is handled differently.
-      if i + 1 == num_layers - 1 {
+      if i == num_layers - 1 { // the last i to be processed will be the second to last layer
         total_value_changes += upper_layer.values_timestep_top_level(self.gamma, lower_layer);
       } else {
         total_value_changes += upper_layer.values_timestep(self.gamma, Some(lower_layer));

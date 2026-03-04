@@ -31,7 +31,7 @@ fn main() {
   let output_layer_size = 10; // for the 10 classes of digits
   let layer_sizes: Vec<usize> = vec![
     input_layer_size,
-    256,
+    128,
     64,
     output_layer_size
   ];
@@ -39,9 +39,9 @@ fn main() {
 
   // Training params
   let snapshot_interval: u32 = 100;
-  let gamma: f32 = 0.1;
+  let gamma: f32 = 0.05;
   let alpha: f32 = 0.001;
-  let training_steps: u32 = 1000;
+  let training_steps: u32 = data.num_images as u32; // full dataset
   let convergence_steps: u32 = 50;
   let convergence_threshold: f32 = 1e-5;
   let activation_function: ActivationFunction = ActivationFunction::Relu;
