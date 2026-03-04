@@ -3,13 +3,10 @@ use std::time::Instant;
 use predictive_coding::{
   model::{
     model::{
-      PredictiveCodingModel,
-      PredictiveCodingModelConfig
+      PredictiveCodingModel
     },
     model_utils::{
-      ActivationFunction,
-      load_model,
-      save_model
+      create_from_config
     }
   },
   training::train_model_handler,
@@ -17,53 +14,33 @@ use predictive_coding::{
 };
 
 use tracing::info;
+use clap::Parser;
+
+#[derive(Parser)]
+struct BenchArgs {
+  /// The model file to benchmark. If it doesn't exist, a new model will be created with the same architecture as the MNIST model and random weights, and saved to this path for future
+  #[arg(short, long, default_value_t = String::from("benchmark_data/model_config.json"))]
+  config: String,
+}
 
 
 fn main() {
   logging::setup_tracing(false);
+  let args = BenchArgs::parse();
 
   // Run a benchmark model. Random input and output data, inputs are pinned
   // And we run for 50 convergence steps, tolerance of 0.0 (i.e. run for all 50 steps)
-  let model_fname: &str = "benchmark_data/initial_model.json";
-  let create_model: bool = !std::path::Path::new(model_fname).exists();
+  let config: &String = &args.config;
+  let mut model = create_from_config(config);
 
-  let mut model = if create_model {
-    info!("No existing model found at {}, creating a new one for benchmarking", model_fname);
-    // Model params similar to mnist data for benchmarking.
-    let layer_sizes: Vec<usize> = vec![
-      28*28,
-      256,
-      64,
-      10
-    ];
-
-    // Training params
-    let config: PredictiveCodingModelConfig = PredictiveCodingModelConfig {
-      layer_sizes,
-      alpha: 0.001,
-      gamma: 0.1,
-      convergence_steps: 50,
-      convergence_threshold: 0.0,
-      activation_function: ActivationFunction::Relu
-    };
-    let new_model: PredictiveCodingModel = PredictiveCodingModel::new(&config);
-    save_model(&new_model, model_fname);
-    new_model
-  } else {
-    info!("Loading existing model from {} for benchmarking", model_fname);
-    load_model(model_fname)
-  };
-
-  // Training params
   let training_steps: u32 = 100;
-  let convergence_steps: u32 = 50;
-  let convergence_threshold: f32 = 0.0;
+  let model_config = model.get_config();
 
   info!(
     "Benchmarking hyperparameters:\n\ttraining steps: {}\n\tconvergence steps: {}\n\tconvergence threshold: {}",
     training_steps,
-    convergence_steps,
-    convergence_threshold,
+    model_config.convergence_steps,
+    model_config.convergence_threshold,
   );
 
   let output_prefix = format!("benchmark_data/{}", chrono::Utc::now().timestamp());
@@ -80,12 +57,21 @@ fn main() {
     "git_commit_hash": current_commit_hash_str,
     "run_timestamp": chrono::Utc::now().to_rfc3339(),
     "training_steps": training_steps,
-    "convergence_steps": convergence_steps,
-    "convergence_threshold": convergence_threshold,
+    "convergence_steps": model_config.convergence_steps,
+    "convergence_threshold": model_config.convergence_threshold,
   });
 
   std::fs::create_dir_all(output_prefix.clone()).unwrap();
-  std::fs::write(format!("{}{}", output_prefix, "/params.json"), serde_json::to_string_pretty(&params).unwrap()).unwrap();
+  // benchmarking params dumped to file
+  serde_json::to_writer_pretty(
+    std::fs::File::create(format!("{}{}", output_prefix, "/params.json")).unwrap(),
+    &params
+  ).unwrap();
+  // Model config dumped to file
+  serde_json::to_writer_pretty(
+    std::fs::File::create(format!("{}{}", output_prefix, "/model_config.json")).unwrap(),
+    &model_config
+  ).unwrap();
 
   benchmark(
     &mut model,

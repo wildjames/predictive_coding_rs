@@ -1,0 +1,13 @@
+{
+  "gamma": 0.05,
+  "alpha": 0.002,
+  "convergence_steps": 80,
+  "convergence_threshold": 1e-5,
+  "layer_sizes": [
+    784,
+    512,
+    256,
+    10
+  ],
+  "activation_function": "Relu"
+}

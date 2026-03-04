@@ -1,6 +1,0 @@
-{
-  "convergence_steps": 50,
-  "convergence_threshold": 0.0,
-  "git_commit_hash": "2721b87052eb30b73b4b591024f98bbdd54999ad",
-  "training_steps": 100
-}

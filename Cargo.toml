@@ -16,10 +16,6 @@ name = "eval"
 path = "src/evaluate.rs"
 
 [[bin]]
-name = "infer"
-path = "src/infer.rs"
-
-[[bin]]
 name = "generate"
 path = "src/generate.rs"
 
@@ -29,6 +25,7 @@ path = "examples/test_load_data.rs"
 
 [dependencies]
 chrono = "0.4.44"
+clap = { version = "4.5.60", features = ["derive"] }
 csv = "1.4.0"
 image = "0.25.9"
 ndarray = { version = "0.17.2", features = ["serde"] }

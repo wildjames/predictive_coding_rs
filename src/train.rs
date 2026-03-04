@@ -3,19 +3,51 @@
 use predictive_coding::{
   data_handling::data_handler,
   model::{
-    model::{PredictiveCodingModel},
-    model_utils::{create_from_config, save_model_config, save_model}
+    model::{PredictiveCodingModel, PredictiveCodingModelConfig},
+    model_utils::{create_from_config, load_model, save_model, save_model_config}
   },
   training::train_model_handler,
   utils::logging
 };
 
 use tracing::info;
+use clap::Parser;
 
+/// Train a predictive coding model on the MNIST dataset. The model architecture and training hyperparameters are defined in a config file, and the trained model is saved to disk at regular intervals during training. The final trained model is also saved to disk at the end of training. Exactly one of --config and --snapshot should be provided.
+#[derive(Parser)]
+struct TrainArgs {
+  // Model input. At least one of these must be given, else exit
+  /// Path to model config file
+  #[arg(short, long)]
+  config: Option<String>,
+  /// Path to model snapshot file
+  #[arg(short, long)]
+  snapshot: Option<String>,
+
+  /// Training steps
+  #[arg(long, default_value_t = 100_000)]
+  training_steps: u32,
+  /// Report interval (default to 1_000)
+  #[arg(long, default_value_t = 1_000)]
+  report_interval: u32,
+  /// Snapshot interval (default to 10_000)
+  #[arg(long, default_value_t = 10_000)]
+  snapshot_interval: u32,
+}
 
 /// Entry point for loading data, building the model, and running training.
 fn main() {
   logging::setup_tracing(false);
+
+  let args = TrainArgs::parse();
+
+  // Assert that we have only config or snapshot
+  if (
+    args.config.is_some() && args.snapshot.is_some())
+    || (args.config.is_none() && args.snapshot.is_none()
+  ) {
+    panic!("Exactly one of --config and --snapshot must be provided");
+  }
 
   let data: data_handler::ImagesBWDataset = data_handler::load_mnist(
       "data/mnist/train-images-idx3-ubyte",
@@ -26,32 +58,31 @@ fn main() {
     data.num_images
   );
 
-  // Training params
-  let report_interval: u32 = 1_000;
-  let snapshot_interval: u32 = 30_000;
-  let training_steps: u32 = (data.num_images * 2) as u32;
-  let convergence_steps: u32 = 50;
-  let convergence_threshold: f32 = 1e-5;
+  // Build the model
+  let mut model: PredictiveCodingModel = if let Some(config) = args.config {
+    create_from_config(&config)
+  } else if let Some(snapshot) = args.snapshot {
+    load_model(&snapshot)
+  } else {
+    // Cover compiler error
+    panic!("Exactly one of config and snapshot must be provided");
+  };
 
   info!(
-    "Training hyperparameters:\n\ttraining steps: {}\n\tconvergence steps: {}\n\tconvergence threshold: {}\n\tsnapshot interval: {}",
-    training_steps,
-    convergence_steps,
-    convergence_threshold,
-    snapshot_interval
+    "Training parameters:\n\ttraining steps: {}\n\tsnapshot interval: {}",
+    args.training_steps,
+    args.snapshot_interval
   );
 
-  // Build the model
-  let fname: &str = "data/model_config.json";
-  let mut model: PredictiveCodingModel = create_from_config(fname);
-
-  let config = model.get_config();
+  let config: PredictiveCodingModelConfig = model.get_config();
   info!(
-    "Model architecture:\n\tlayer sizes: {:?}\n\tgamma: {}\n\talpha: {}\n\tactivation function: {:?}",
+    "Model architecture:\n\tlayer sizes: {:?}\n\tgamma: {}\n\talpha: {}\n\tactivation function: {:?}\n\tconvergence steps: {}\n\tconvergence threshold: {}",
     config.layer_sizes,
     config.gamma,
     config.alpha,
     config.activation_function,
+    config.convergence_steps,
+    config.convergence_threshold
   );
 
   let snapshot_output_prefix: String = format!(
@@ -64,9 +95,9 @@ fn main() {
   train_model_handler::train(
     &mut model,
     &data,
-    training_steps,
-    report_interval,
-    snapshot_interval,
+    args.training_steps,
+    args.report_interval,
+    args.snapshot_interval,
     &snapshot_output_prefix,
   );
 
