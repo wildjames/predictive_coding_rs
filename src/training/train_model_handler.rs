@@ -34,13 +34,11 @@ fn set_input_and_output(
 }
 
 /// Run inference to convergence on a single sample and update weights.
-fn train_sample(
+pub fn train_and_update_model(
   model: &mut PredictiveCodingModel,
-  data: &data_handler::ImagesBWDataset,
   convergence_threshold: f32,
   convergence_steps: u32
 ) {
-  set_input_and_output(model, data);
   model.reinitialise_latents();
   // Train on this example until convergence.
   model.converge_values_with_updates(convergence_threshold, convergence_steps);
@@ -58,13 +56,10 @@ pub fn train(
   snapshot_interval: u32,
   snapshot_output_prefix: &str
 ) {
-  // Current timestamp
-
-
   for step in 0..training_steps {
-    train_sample(
+    set_input_and_output(model, data);
+    train_and_update_model(
       model,
-      data,
       convergence_threshold,
       convergence_steps
     );
@@ -84,16 +79,4 @@ pub fn train(
       save_model(model, &oname);
     }
   }
-
-  let model_error = model.read_total_error();
-  info!(
-    "Final error of the model is {}",
-    model_error
-  );
-
-  let model_energy = model.read_total_energy();
-  info!(
-    "Final energy of the model is {}",
-    model_energy
-  );
 }

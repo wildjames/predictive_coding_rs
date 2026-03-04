@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [[bin]]
+name = "bench"
+path = "src/benchmark.rs"
+
+[[bin]]
 name = "train"
 path = "src/train.rs"
 
@@ -21,6 +25,7 @@ path = "examples/test_load_data.rs"
 
 [dependencies]
 chrono = "0.4.44"
+csv = "1.4.0"
 image = "0.25.9"
 ndarray = { version = "0.17.2", features = ["serde"] }
 rand = "0.10.0"
