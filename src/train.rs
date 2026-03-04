@@ -89,8 +89,16 @@ fn main() {
     "data/model_{}/model",
     chrono::Utc::now().timestamp()
   );
-  // Write the config to a file
+  // Write the config and training params to a file
   save_model_config(&model.get_config(), &format!("{}_config.json", snapshot_output_prefix));
+  serde_json::to_writer_pretty(
+    std::fs::File::create(format!("{}_training_params.json", snapshot_output_prefix)).unwrap(),
+    &serde_json::json!({
+      "training_steps": args.training_steps,
+      "report_interval": args.report_interval,
+      "snapshot_interval": args.snapshot_interval,
+    })
+  ).unwrap();
 
   train_model_handler::train(
     &mut model,
