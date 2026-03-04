@@ -18,7 +18,7 @@ use clap::Parser;
 
 #[derive(Parser)]
 struct BenchArgs {
-  /// The model file to benchmark. If it doesn't exist, a new model will be created with the same architecture as the MNIST model and random weights, and saved to this path for future
+  /// The model file to benchmark. If it doesn't exist, a new model will be created with the same architecture as the MNIST model and random weights, and saved to this path for future use
   #[arg(short, long, default_value_t = String::from("benchmark_data/model_config.json"))]
   config: String,
 }

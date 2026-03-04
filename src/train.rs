@@ -16,7 +16,6 @@ use clap::Parser;
 /// Train a predictive coding model on the MNIST dataset. The model architecture and training hyperparameters are defined in a config file, and the trained model is saved to disk at regular intervals during training. The final trained model is also saved to disk at the end of training. Exactly one of --config and --snapshot should be provided.
 #[derive(Parser)]
 struct TrainArgs {
-  // Model input. At least one of these must be given, else exit
   /// Path to model config file
   #[arg(short, long)]
   config: Option<String>,
