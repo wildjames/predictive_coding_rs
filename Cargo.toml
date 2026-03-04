@@ -12,6 +12,10 @@ name = "train"
 path = "src/train.rs"
 
 [[bin]]
+name = "eval"
+path = "src/evaluate.rs"
+
+[[bin]]
 name = "infer"
 path = "src/infer.rs"
 

@@ -15,6 +15,9 @@ clean:
 train: build
 	cargo run --release --bin train
 
+eval: build
+	cargo run --release --bin eval $(MODEL)
+
 infer: build
 	cargo run --release --bin infer $(MODEL)
 
