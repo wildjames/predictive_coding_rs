@@ -8,11 +8,11 @@ I have, at the time of writing, got a model architecture that converges on a rou
 
 - [x] First correct implementation of the PC architecture
 - [x] Make a ModelConfig struct to help in building models
-- [ ] Model evaluation binary (accuracy, average confidence, speed)
+- [x] Model evaluation binary (accuracy, average confidence, speed)
 - [ ] Flesh out train binary
-  - [ ] allow user to resume from stored model
-	- [ ] store the model hyperparameters in a json file in the output directory
-	- [ ] allow hyperparameters to be set by the user (pass in JSON?)
+  - [x] allow user to resume from stored model
+	- [x] store the model hyperparameters in a json file in the output directory
+	- [x] allow hyperparameters to be set by the user (pass in JSON)
 - [ ] Gain confidence in my implementation
 	- [x] Figure out the model params for a mnist classifier
 	- [ ] unit tests?

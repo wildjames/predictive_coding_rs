@@ -24,7 +24,7 @@ fn main() {
   info!("Loaded model from {}", model_fname);
 
   model.unpin_input();
-  model.randomise_input();
+  model.reinitialise_latents();
 
   let output_label: u8 = args[2]
     .parse()
@@ -37,9 +37,6 @@ fn main() {
 
   model.set_output(output_values);
   model.pin_output();
-
-  info!("Is the input pinned? {}", model.get_layers().first().unwrap().pinned);
-  info!("Is the output pinned? {}", model.get_layers().last().unwrap().pinned);
 
   model.converge_values_with_updates();
 
