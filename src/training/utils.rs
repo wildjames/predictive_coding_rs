@@ -37,13 +37,13 @@ pub struct TrainConfig {
   /// Path to model snapshot file
   pub snapshot: Option<String>,
 
-  /// Enable multithreading for training (default: false)
-  pub multithread: bool,
+  /// Enable mini-batch for training
+  pub mini_batch_enabled: bool,
+  /// Mini batch size for multithreaded training
+  pub batch_size: Option<u32>,
 
   /// Training steps
   pub training_steps: u32,
-  /// Mini batch size for multithreaded training (default: 8)
-  pub batch_size: u32,
   /// Report interval (default to 1_000)
   pub report_interval: u32,
   /// Snapshot interval (default to 10_000)

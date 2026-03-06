@@ -95,12 +95,14 @@ fn main() {
     &format!("{}_training_config.json", snapshot_output_prefix)
   );
 
-  if training_config.multithread {
+  if training_config.mini_batch_enabled {
     info!("Multithreading enabled for training");
+    let batch_size: u32 = training_config.batch_size.expect("Batch size must be provided when mini-batch training is enabled");
+
     cpu_train::mini_batch_train(
       &mut model,
       &data,
-      training_config.batch_size,
+      batch_size,
       training_config.training_steps,
       training_config.report_interval,
       training_config.snapshot_interval,
