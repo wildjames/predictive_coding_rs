@@ -1,6 +1,6 @@
 //! Math utilities for predictive coding models.
 
-use crate::model::model::{
+use crate::model_structure::model::{
   PredictiveCodingModel,
   PredictiveCodingModelConfig
 };

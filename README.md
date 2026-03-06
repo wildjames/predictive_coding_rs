@@ -9,6 +9,9 @@ I have, at the time of writing, got a model architecture that converges on a rou
 - [x] First correct implementation of the PC architecture
 - [x] Make a ModelConfig struct to help in building models
 - [x] Model evaluation binary (accuracy, average confidence, speed)
+- [x] Multithreading
+  - [ ] Refactor benchmark to benchmark the multithreaded version of the training too
+- [ ] GPU processing
 - [ ] Flesh out train binary
   - [x] allow user to resume from stored model
 	- [x] store the model hyperparameters in a json file in the output directory
@@ -17,6 +20,8 @@ I have, at the time of writing, got a model architecture that converges on a rou
 	- [x] Figure out the model params for a mnist classifier
 	- [ ] unit tests?
 	- [ ] integration tests
+- [ ] more advanced training strategies
+  - [x] mini-batch sampling (optimise B samples in parallel, then for weight updates compute the mean $\Delta\bf{W}$ for the batches. 5.2. of 2506.06332)
 - [ ] Benchmark tracking
 	- [x] Basic benchmarking
 	- [ ] Host a runner on my own known hardware (polyhymnia?) and dispatch a workflow to it on pushes to main.

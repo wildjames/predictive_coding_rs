@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use predictive_coding::{
   data_handling::data_handler,
-  model::model_utils::{create_from_config},
+  model_structure::model_utils::{load_model},
   utils::logging
 };
 
@@ -24,7 +24,7 @@ fn main() {
 
   let args = EvalArgs::parse();
 
-  let mut model = create_from_config(&args.model_file);
+  let mut model = load_model(&args.model_file);
   info!("Loaded model from {}", args.model_file);
 
 
@@ -46,6 +46,7 @@ fn main() {
   let mut confidence_sum: f32 = 0.0;
   let mut sum_covnvergence_time: f32 = 0.0;
 
+  // TODO: Multithread this
   for i in 0..data.num_images {
     let input_values: Array1<f32> = data.images
       .row(i)
@@ -57,7 +58,7 @@ fn main() {
     model.reinitialise_latents();
     model.set_input(input_values);
     let start_time = Instant::now();
-    model.converge_values_with_updates();
+    model.converge_values();
     let elapsed_time = start_time.elapsed();
 
     let output_activations = model.get_output();

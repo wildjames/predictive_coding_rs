@@ -2,11 +2,12 @@
 //!
 //! Defines a layered model with local prediction errors and weight updates.
 
-use crate::model::model_utils::{ActivationFunction, outer_product};
+use crate::model_structure::model_utils::{ActivationFunction, outer_product};
 
 use serde::{Deserialize, Serialize};
 use ndarray::{Array1, Array2};
 use rand::RngExt;
+
 
 /// A single predictive coding layer with values, predictions, errors, and weights.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -17,7 +18,7 @@ pub struct Layer {
   pub weights: Array2<f32>, // weights to predict the layer below, w^l
   pub pinned: bool, // If a layer is pinned, its values are not updated during time evolution (e.g. input layers in unsupervised learning, or input and output layers in supervised learning)
   pub activation_function: ActivationFunction,
-  pub size: usize, // The number of nodes in this layer, for easy reference. Should be the same as values.len(), predictions.len(), and errors.len()
+  pub size: usize, // The number of nodes in this layer, for easy reference. Should be the same as values.len(), predictions.len(), and /errors.len()
   xavier_limit: f32,
 }
 
@@ -68,11 +69,13 @@ impl Layer {
     }
   }
 
+  /// Randomise weights between -xavier_limit and xavier_limit for all nodes in this layer.
   pub fn randomise_weights(&mut self) {
     let mut rng = rand::rng();
     self.weights = Array2::from_shape_fn(self.weights.dim(), |_| rng.random_range(-self.xavier_limit..self.xavier_limit));
   }
 
+  /// Randomise values between 0..1 for all nodes in this layer.
   pub fn randomise_values(&mut self, rng: &mut rand::prelude::ThreadRng) {
     self.values = Array1::from_shape_fn(self.values.len(), |_| rng.random_range(0.0..1.0));
   }
@@ -83,6 +86,7 @@ impl Layer {
     self.pinned = true;
   }
 
+  /// Unpin the layer values to allow updates during inference.
   fn unpin_values(&mut self) {
     self.pinned = false;
   }
@@ -100,26 +104,24 @@ impl Layer {
 
   /// Update the errors for this layer based on the predictions and values of this layer.
   fn compute_errors(&mut self) {
-    // error is the difference between the predicted and actual value of each node
     self.errors = &self.values - &self.predictions;
   }
 
   /// Sum the signed error values for all nodes in this layer.
   fn read_total_error(&self) -> f32 {
-    // Sum the errors of all nodes in this layer
     self.errors.iter().sum()
   }
 
   /// Sum the squared error values for all nodes in this layer.
   fn read_total_energy(&self) -> f32 {
-    // Energy is the sum of the squared errors of all nodes in this layer
+    // E = 1/2 * sum(err^2)
     self.errors.mapv(|x| x.powi(2)).iter().sum()
   }
 
   /// Compute the change in node values under a single timestep of PC.
   /// Returns the summed absolute change in node values across this layer.
   /// For the input layer, there is no lower layer and None should be passed in instead.
-  fn _values_timestep(&mut self, is_top_level: bool, gamma: f32, lower_layer: Option<&Layer>) -> f32 {
+  fn values_timestep(&mut self, is_top_level: bool, gamma: f32, lower_layer: Option<&Layer>) -> f32 {
     if self.pinned {
       return 0.0
     }
@@ -155,17 +157,7 @@ impl Layer {
     value_changes.mapv(|x| x.abs()).sum()
   }
 
-  fn values_timestep(&mut self, gamma: f32, lower_layer: Option<&Layer>) -> f32 {
-    self._values_timestep(false, gamma, lower_layer)
-  }
-
-
-  fn values_timestep_top_level(&mut self, gamma: f32, lower_layer: &Layer) -> f32 {
-    self._values_timestep(true, gamma, Some(lower_layer))
-  }
-
-  /// Update prediction weights after convergence based on lower-layer errors.
-  fn update_weights(&mut self, alpha: f32, lower_layer: &Layer) {
+  fn compute_weight_updates(&mut self, alpha: f32, lower_layer: &Layer) -> Array2<f32> {
     // W^{l+1} += alpha * (phi'(a^l) (hammard) e^l) * x^{l+1,T}
     // where a^l = W^{l+1} * x^{l+1} is the preactivation for the layer below
     let preactivation: Array1<f32> = self.weights.dot(&self.values);
@@ -173,8 +165,12 @@ impl Layer {
     let gain_modulated_errors: Array1<f32> = &activation_function_result * &lower_layer.errors;
 
     // outer product yields (lower_size, upper_size)
-    let weight_changes: Array2<f32> = alpha * outer_product(&gain_modulated_errors, &self.values);
+    alpha * outer_product(&gain_modulated_errors, &self.values)
+  }
 
+  /// Update prediction weights after convergence based on lower-layer errors.
+  fn update_weights(&mut self, alpha: f32, lower_layer: &Layer) {
+    let weight_changes: Array2<f32> = self.compute_weight_updates(alpha, lower_layer);
     self.weights += &weight_changes;
   }
 }
@@ -235,7 +231,8 @@ impl PredictiveCodingModel {
       gamma: self.gamma,
       convergence_steps: self.convergence_steps,
       convergence_threshold: self.convergence_threshold,
-      activation_function: self.layers.first().unwrap().activation_function, // Assuming all layers have the same activation function
+      // I only allow that all layers have the same activation function
+      activation_function: self.layers.first().unwrap().activation_function,
     }
   }
 
@@ -268,22 +265,27 @@ impl PredictiveCodingModel {
     &self.layers[0].values
   }
 
+  /// Sets the values of the input layer to the given input values, and pin the input layer.
   pub fn set_input(&mut self, input_values: Array1<f32>) {
     self.layers[0].pin_values(input_values);
   }
 
+  /// Prevent the input layer values from being updated during inference, by pinning the input layer.
   pub fn pin_input(&mut self) {
     self.layers[0].pinned = true;
   }
 
+  /// Allow the input layer values to be updated during inference, by unpinning the input layer.
   pub fn unpin_input(&mut self) {
     self.layers[0].unpin_values();
   }
 
+  /// Randomise the input layer values between 0..1 and unpin the input layer to allow updates during inference.
   pub fn randomise_input(&mut self) {
     let input_layer = &mut self.layers[0];
     let mut rng = rand::rng();
-    input_layer.values = Array1::from_shape_fn(input_layer.size, |_| rng.random_range(0.0..1.0));
+    input_layer.randomise_values(&mut rng);
+    input_layer.unpin_values();
   }
 
   /// Set the values of the output layer to the given output values, and pins the output layer.
@@ -291,22 +293,27 @@ impl PredictiveCodingModel {
     &self.layers.last().unwrap().values
   }
 
+  /// Sets the values of the output layer to the given output values, and pins the output layer.
   pub fn set_output(&mut self, output_values: Array1<f32>) {
     self.layers.last_mut().unwrap().pin_values(output_values);
   }
 
+  /// Prevent the output layer values from being updated during inference, by pinning the output layer.
   pub fn pin_output(&mut self) {
     self.layers.last_mut().unwrap().pinned = true;
   }
 
+  /// Allow the output layer values to be updated during inference, by unpinning the output layer.
   pub fn unpin_output(&mut self) {
     self.layers.last_mut().unwrap().unpin_values();
   }
 
+  /// Randomise the output layer values between 0..1 and unpin the output layer to allow updates during inference.
   pub fn randomise_output(&mut self) {
     let output_layer = self.layers.last_mut().unwrap();
     let mut rng = rand::rng();
-    output_layer.values = Array1::from_shape_fn(output_layer.size, |_| rng.random_range(0.0..1.0));
+    output_layer.randomise_values(&mut rng);
+    output_layer.unpin_values();
   }
 
   /// Reinitialise all unpinned (latent) layer values to small random values.
@@ -322,23 +329,21 @@ impl PredictiveCodingModel {
   }
 
   /// Evolves node values until convergence, recomputing predictions and errors each step.
-  /// Returns the number of steps taken and the per-step delta values.
-  pub fn converge_values_with_updates(&mut self) -> (u32, Vec::<f32>) {
+  /// Returns the number of steps taken to converge.
+  pub fn converge_values(&mut self) -> u32{
     let mut converged: bool = false;
     let mut convergence_count: u32 = 0;
 
-    let mut value_changes: Vec<f32> = vec![];
     while !converged && (convergence_count < self.convergence_steps) {
       self.compute_predictions_and_errors();
-      value_changes.push(self.timestep());
 
-      if value_changes.last().unwrap().abs() < self.convergence_threshold {
+      if self.timestep().abs() < self.convergence_threshold {
         converged = true;
       }
       convergence_count += 1;
     };
 
-    (convergence_count, value_changes)
+    convergence_count
   }
 
   /// Compute predictions for each layer and then update errors.
@@ -395,7 +400,7 @@ impl PredictiveCodingModel {
     let mut total_value_changes = 0.0;
 
     // update the input layer, which has no lower layer
-    total_value_changes += self.layers[0].values_timestep(self.gamma, None);
+    total_value_changes += self.layers[0].values_timestep(false, self.gamma, None);
 
     // the update of a node value depends on the errors of the layer below it.
     let num_layers: usize = self.layers.len();
@@ -406,9 +411,9 @@ impl PredictiveCodingModel {
 
       // The last layer is handled differently.
       if i == num_layers - 1 { // the last i to be processed will be the second to last layer
-        total_value_changes += upper_layer.values_timestep_top_level(self.gamma, lower_layer);
+        total_value_changes += upper_layer.values_timestep(true, self.gamma, Some(lower_layer));
       } else {
-        total_value_changes += upper_layer.values_timestep(self.gamma, Some(lower_layer));
+        total_value_changes += upper_layer.values_timestep(false, self.gamma, Some(lower_layer));
       }
     }
 
@@ -417,15 +422,42 @@ impl PredictiveCodingModel {
     total_value_changes / total_num_nodes
   }
 
-  /// Update prediction weights for all layers after inference.
+  /// Compute and apply prediction weights for all layers after inference.
   pub fn update_weights(&mut self) {
     let num_layers = self.layers.len();
     for i in 0..num_layers - 1 {
       let (lower, upper) = self.layers.split_at_mut(i + 1);
-      let lower_layer = &lower[i];
-      let upper_layer = &mut upper[0];
+      let lower_layer: &Layer = &lower[i];
+      let upper_layer: &mut Layer = &mut upper[0];
 
       upper_layer.update_weights(self.alpha, lower_layer);
     }
   }
+
+  /// Compute the change in weights based on the current errors and values, without applying the changes to the model.
+  /// Returns a Vec where index i contains the weight updates for layers[i+1].weights.
+  pub fn compute_weight_updates(&mut self) -> Vec<Array2<f32>> {
+    let mut weight_updates: Vec<Array2<f32>> = Vec::new();
+
+    let num_layers = self.layers.len();
+    for i in 0..num_layers - 1 {
+      let (lower, upper) = self.layers.split_at_mut(i + 1);
+      let lower_layer: &Layer = &lower[i];
+      let upper_layer: &mut Layer = &mut upper[0];
+
+      weight_updates.push(
+        upper_layer.compute_weight_updates(self.alpha, lower_layer)
+      );
+    }
+
+    weight_updates
+  }
+
+  pub fn apply_weight_updates(&mut self, weight_updates: Vec<Array2<f32>>) {
+    // weight_updates[i] corresponds to layers[i+1].weights
+    for (i, weights) in weight_updates.iter().enumerate() {
+      self.layers[i + 1].weights += weights;
+    }
+  }
+
 }
