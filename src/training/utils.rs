@@ -30,6 +30,12 @@ pub fn set_rand_input_and_output(
 
 }
 
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub enum TrainingStrategy {
+  SingleThread,
+  MiniBatch
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct TrainConfig {
   /// Path to model config file
@@ -37,9 +43,10 @@ pub struct TrainConfig {
   /// Path to model snapshot file
   pub snapshot: Option<String>,
 
-  /// Enable mini-batch for training
-  pub mini_batch_enabled: bool,
-  /// Mini batch size for multithreaded training
+  /// What training strategy to use
+  pub training_strategy: TrainingStrategy,
+
+  /// Mini batch size, when using that strategy
   pub batch_size: Option<u32>,
 
   /// Training steps

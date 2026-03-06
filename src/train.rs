@@ -3,23 +3,23 @@
 use predictive_coding::{
   data_handling::data_handler,
   model_structure::{
-    model::{
-      PredictiveCodingModel,
-      PredictiveCodingModelConfig
-    },
+    model::PredictiveCodingModel,
     model_utils::{
       create_from_config,
       load_model,
-      save_model,
-      save_model_config
+      save_model
     }
   },
   training::{
     cpu_train,
+    train_handler::{
+      TrainingHandler,
+      run_supervised_training_loop
+    },
     utils::{
       TrainConfig,
-      load_training_config,
-      save_training_config
+      TrainingStrategy,
+      load_training_config
     }
   },
   utils::logging
@@ -53,7 +53,7 @@ fn main() {
   );
 
   // Build the model
-  let mut model: PredictiveCodingModel = if let Some(config) = &training_config.model_config {
+  let model: PredictiveCodingModel = if let Some(config) = &training_config.model_config {
     create_from_config(config)
   } else if let Some(snapshot) = &training_config.snapshot {
     load_model(snapshot)
@@ -62,64 +62,35 @@ fn main() {
     panic!("Exactly one of config and snapshot must be provided");
   };
 
-  info!(
-    "Training parameters:\n\ttraining steps: {}\n\treporting interval: {}\n\tsnapshot interval: {}",
-    training_config.training_steps,
-    training_config.report_interval,
-    training_config.snapshot_interval
-  );
-
-  let loaded_model_config: PredictiveCodingModelConfig = model.get_config();
-  info!(
-    "Model architecture:\n\tlayer sizes: {:?}\n\tgamma: {}\n\talpha: {}\n\tactivation function: {:?}\n\tconvergence steps: {}\n\tconvergence threshold: {}",
-    loaded_model_config.layer_sizes,
-    loaded_model_config.gamma,
-    loaded_model_config.alpha,
-    loaded_model_config.activation_function,
-    loaded_model_config.convergence_steps,
-    loaded_model_config.convergence_threshold
-  );
-
-  let snapshot_output_prefix: String = format!(
+  let file_output_prefix: String = format!(
     "data/model_{}/model",
     chrono::Utc::now().timestamp()
   );
 
-  // Write the config and training params to a file
-  save_model_config(
-    &model.get_config(),
-    &format!("{}_config.json", snapshot_output_prefix)
-  );
-  save_training_config(
-    &training_config,
-    &format!("{}_training_config.json", snapshot_output_prefix)
-  );
+  let mut handler: Box<dyn TrainingHandler> = match training_config.training_strategy {
+    TrainingStrategy::SingleThread => Box::new(cpu_train::SingleThreadTrainHandler::new(
+      training_config.clone(),
+      model,
+      data,
+      file_output_prefix.clone()
+    )),
+    TrainingStrategy::MiniBatch => Box::new(cpu_train::BatchTrainHandler::new(
+      training_config.clone(),
+      model,
+      data,
+      file_output_prefix.clone()
+    ))
+  };
 
-  if training_config.mini_batch_enabled {
-    info!("Multithreading enabled for training");
-    let batch_size: u32 = training_config.batch_size.expect("Batch size must be provided when mini-batch training is enabled");
-
-    cpu_train::mini_batch_train(
-      &mut model,
-      &data,
-      batch_size,
-      training_config.training_steps,
-      training_config.report_interval,
-      training_config.snapshot_interval,
-      &snapshot_output_prefix
-    );
-  } else {
-    info!("Multithreading disabled for training");
-    cpu_train::train(
-      &mut model,
-      &data,
-      training_config.training_steps,
-      training_config.report_interval,
-      training_config.snapshot_interval,
-      &snapshot_output_prefix,
-    );
-  }
+  // Execute the loop, training the model
+  run_supervised_training_loop(
+    handler.as_mut(),
+    &file_output_prefix
+  );
 
   info!("Finished training, saving final model");
-  save_model(&model, &format!("{}_{}", snapshot_output_prefix, "final.json"));
+  save_model(
+    handler.get_model(),
+    &format!("{}_{}", file_output_prefix, "final.json")
+  );
 }
