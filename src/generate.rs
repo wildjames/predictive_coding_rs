@@ -5,7 +5,7 @@ use tracing::{error, info};
 use ndarray::Array1;
 
 use predictive_coding::{
-  model::model_utils::{load_model},
+  model_structure::model_utils::{load_model},
   utils::logging
 };
 
@@ -38,7 +38,7 @@ fn main() {
   model.set_output(output_values);
   model.pin_output();
 
-  model.converge_values_with_updates();
+  model.converge_values();
 
   let output_path = format!("{}_gen_{}.png", model_fname, output_label);
   println!("Saving generated image to {}", output_path);

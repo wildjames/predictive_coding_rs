@@ -1,0 +1,8 @@
+{
+  "model_config": "data/model_config.json",
+  "multithread": true,
+  "training_steps": 10000,
+  "batch_size": 6,
+  "report_interval": 100,
+  "snapshot_interval": 1000
+}
