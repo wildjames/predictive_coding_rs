@@ -37,8 +37,8 @@ fn bench_single_thread_binary_smoke_on_tiny_fixtures() {
 
   // Do the produced artifacts' contents match what we expect?
   assert_json_files_equal(
-    &bench_dir.join("benchmark_config.json"),
-    &root.join("test_data/baselines/single_thread/bench/benchmark_config.json"),
+    &bench_dir.join("benchmark_model_config.json"),
+    &root.join("test_data/baselines/single_thread/bench/benchmark_model_config.json"),
   );
   assert_json_files_equal(
     &bench_dir.join("benchmark_training_config.json"),

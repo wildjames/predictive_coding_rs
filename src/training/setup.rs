@@ -65,7 +65,8 @@ pub fn setup_training_run_handler(
 
   // Make sure that the output directory exists
   let output_dir = std::path::Path::new(&output_prefix).parent().unwrap();
-  std::fs::create_dir_all(output_dir).unwrap();
+  info!("Saving training artifacts to {}", output_dir.display());
+  std::fs::create_dir_all(output_dir).expect("Failed to create output directory for training artifacts");
 
   // The handler orchestrated the training process by providing hook functions to the training loop.
   // Choose the correct one for this config.

@@ -3,12 +3,11 @@
 use std::time::Instant;
 
 use predictive_coding::{
-  training::{
+  model_structure::{model::PredictiveCodingModelConfig, model_utils::save_model_config}, training::{
     setup::setup_training_run_handler,
     train_handler::TrainingHandler,
-    utils::TrainConfig
-  },
-  utils::{logging, timestamp}
+    utils::{TrainConfig, save_training_config}
+  }, utils::{logging, timestamp}
 };
 
 use tracing::info;
@@ -103,6 +102,17 @@ fn run_benchmark_training_loop(
 
   let training_config: &TrainConfig = handler.get_config();
   let training_steps: u32 = training_config.training_steps;
+
+  // Write the config and training params to a file
+  let model_config: &PredictiveCodingModelConfig = &handler.get_model().get_config();
+  save_model_config(
+    model_config,
+    &format!("{}_model_config.json", &handler.get_file_output_prefix())
+  );
+  save_training_config(
+    handler.get_config(),
+    &format!("{}_training_config.json", &handler.get_file_output_prefix())
+  );
 
   for step in 0..training_steps {
 
