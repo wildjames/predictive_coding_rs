@@ -3,10 +3,10 @@ use tracing::info;
 use crate::{
   data_handling::data_handler,
   model_structure::{
-    model::PredictiveCodingModel,
-    model_utils::save_model_snapshot
+    model::{PredictiveCodingModel, PredictiveCodingModelConfig},
+    model_utils::{save_model_config, save_model_snapshot}
   },
-  training::utils::{TrainConfig}
+  training::utils::{TrainConfig, save_training_config}
 };
 
 pub trait TrainingHandler {
@@ -50,6 +50,33 @@ pub fn run_supervised_training_loop(handler: &mut dyn TrainingHandler) {
   let report_interval: u32 = training_config.report_interval;
   let snapshot_interval: u32 = training_config.snapshot_interval;
 
+  info!(
+    "Beginning training loop for {} steps with report interval {} and snapshot interval {}",
+    training_steps, report_interval, snapshot_interval
+  );
+
+  let model_config: &PredictiveCodingModelConfig = &handler.get_model().get_config();
+  info!(
+    "Model architecture:\n\tlayer sizes: {:?}\n\tgamma: {}\n\talpha: {}\n\tactivation function: {:?}\n\tconvergence steps: {}\n\tconvergence threshold: {}",
+    model_config.layer_sizes,
+    model_config.gamma,
+    model_config.alpha,
+    model_config.activation_function,
+    model_config.convergence_steps,
+    model_config.convergence_threshold
+  );
+
+  // Write the config and training params to a file
+  save_model_config(
+    model_config,
+    &format!("{}_model_config.json", &handler.get_file_output_prefix())
+  );
+  save_training_config(
+    handler.get_config(),
+    &format!("{}_training_config.json", &handler.get_file_output_prefix())
+  );
+
+  // Main loop
   for step in 0..training_steps {
     handler.pre_step_hook(step);
     handler.train_step(step);
