@@ -58,11 +58,10 @@ Loaders, validators, and binaries return explicit errors with context instead of
 
 ### Tasks
 
-- [ ] Convert loader functions to return `Result` all the way to the binary entry points.
-- [ ] Introduce structured application errors, either with `thiserror` or a small custom error enum.
-- [ ] Replace startup panics for model/data mismatches with validation errors.
-- [ ] Add context to file IO and serialization failures so the failing path is visible.
-- [ ] Make `main` functions return `Result<(), _>` where appropriate.
+- [x] Convert loader functions to return `Result` all the way to the binary entry points.
+- [x] Replace startup panics for model/data mismatches with validation errors.
+- [x] Add context to file IO and serialization failures so the failing path is visible.
+- [x] Make `main` functions return `Result<(), _>` where appropriate.
 
 ## Phase 4: Split Oversized Utility Modules
 

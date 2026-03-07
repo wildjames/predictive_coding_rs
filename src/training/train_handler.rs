@@ -2,6 +2,7 @@ use tracing::info;
 
 use crate::{
   data_handling::data_handler,
+  error::Result,
   model_structure::{
     model::{PredictiveCodingModel, PredictiveCodingModelConfig},
     model_utils::{save_model_config, save_model_snapshot}
@@ -15,13 +16,17 @@ pub trait TrainingHandler {
   fn get_data(&self) -> &data_handler::TrainingDataset;
   fn get_file_output_prefix(&self) -> &String;
 
-  fn pre_training_hook(&mut self);
+  fn pre_training_hook(&mut self) -> Result<()> {
+    Ok(())
+  }
 
-  fn train_step(&mut self, _step: u32);
-  fn report_hook(&mut self, _step: u32);
+  fn train_step(&mut self, _step: u32) -> Result<()>;
+  fn report_hook(&mut self, _step: u32) -> Result<()> {
+    Ok(())
+  }
 
   /// Once the model has completed training, this will be called. By default, it saves the final model to "{file_output_prefix}_final.json"
-  fn post_training_hook(&mut self) {
+  fn post_training_hook(&mut self) -> Result<()> {
     let final_output_path: String = format!("{}_{}", self.get_file_output_prefix(), "final_model.json");
 
     info!("Finished training, saving final model to {}", final_output_path);
@@ -33,13 +38,17 @@ pub trait TrainingHandler {
 
   // Any actions that need to be called with an awareness of the training step can use these hooks. By default, they do nothing.
   // e.g. if you want to anneal the learning rate, that would go here
-  fn pre_step_hook(&mut self, _step: u32) {}
-  fn post_step_hook(&mut self, _step: u32) {}
+  fn pre_step_hook(&mut self, _step: u32) -> Result<()> {
+    Ok(())
+  }
+  fn post_step_hook(&mut self, _step: u32) -> Result<()> {
+    Ok(())
+  }
 }
 
 
-pub fn run_supervised_training_loop(handler: &mut dyn TrainingHandler) {
-  handler.pre_training_hook();
+pub fn run_supervised_training_loop(handler: &mut dyn TrainingHandler) -> Result<()> {
+  handler.pre_training_hook()?;
 
   // Supervised learning
   handler.get_model().pin_input();
@@ -70,31 +79,33 @@ pub fn run_supervised_training_loop(handler: &mut dyn TrainingHandler) {
   save_model_config(
     model_config,
     &format!("{}_model_config.json", &handler.get_file_output_prefix())
-  );
+  )?;
   save_training_config(
     handler.get_config(),
     &format!("{}_training_config.json", &handler.get_file_output_prefix())
-  );
+  )?;
 
   // Main loop
   for step in 0..training_steps {
-    handler.pre_step_hook(step);
-    handler.train_step(step);
-    handler.post_step_hook(step);
+    handler.pre_step_hook(step)?;
+    handler.train_step(step)?;
+    handler.post_step_hook(step)?;
 
     if (report_interval > 0) && (step % report_interval == 0) {
-      handler.report_hook(step);
+      handler.report_hook(step)?;
     }
 
     if (snapshot_interval > 0) && (step % snapshot_interval == 0) {
       let oname: String = format!("{}_snapshot_step_{}.json", handler.get_file_output_prefix(), step);
       info!("Saving model snapshot {}", oname);
 
-      save_model_snapshot(handler.get_model(), &oname);
+      save_model_snapshot(handler.get_model(), &oname)?;
     }
   }
 
-  handler.post_training_hook();
+  handler.post_training_hook()?;
+
+  Ok(())
 }
 
 #[cfg(test)]
@@ -203,30 +214,35 @@ mod tests {
       &self.file_output_prefix
     }
 
-    fn pre_training_hook(&mut self) {
+    fn pre_training_hook(&mut self) -> Result<()> {
       self.events.push(String::from("pre_training"));
+      Ok(())
     }
 
-    fn train_step(&mut self, step: u32) {
+    fn train_step(&mut self, step: u32) -> Result<()> {
       self.events.push(format!("train_step:{step}"));
+      Ok(())
     }
 
-    fn report_hook(&mut self, step: u32) {
+    fn report_hook(&mut self, step: u32) -> Result<()> {
       self.events.push(format!("report:{step}"));
+      Ok(())
     }
 
-    fn pre_step_hook(&mut self, step: u32) {
+    fn pre_step_hook(&mut self, step: u32) -> Result<()> {
       self.events.push(format!("pre_step:{step}"));
+      Ok(())
     }
 
-    fn post_step_hook(&mut self, step: u32) {
+    fn post_step_hook(&mut self, step: u32) -> Result<()> {
       self.events.push(format!("post_step:{step}"));
+      Ok(())
     }
 
-    fn post_training_hook(&mut self) {
+    fn post_training_hook(&mut self) -> Result<()> {
       self.events.push(String::from("post_training"));
       let final_output_path = format!("{}_final_model.json", self.get_file_output_prefix());
-      save_model_snapshot(self.get_model(), &final_output_path);
+      save_model_snapshot(self.get_model(), &final_output_path)
     }
   }
 
@@ -250,7 +266,7 @@ mod tests {
     let output_prefix: String = temp_dir.path().join("model").display().to_string();
     let mut handler: RecordingHandler = RecordingHandler::new(test_config(3, 2, 0), output_prefix);
 
-    run_supervised_training_loop(&mut handler);
+    run_supervised_training_loop(&mut handler).unwrap();
 
     assert_eq!(
       handler.events,
@@ -278,7 +294,7 @@ mod tests {
     let output_prefix = temp_dir.path().join("model").display().to_string();
     let mut handler = RecordingHandler::new(test_config(5, 0, 2), output_prefix.clone());
 
-    run_supervised_training_loop(&mut handler);
+    run_supervised_training_loop(&mut handler).unwrap();
 
     assert!(temp_dir.path().join("model_snapshot_step_0.json").exists());
     assert!(!temp_dir.path().join("model_snapshot_step_1.json").exists());

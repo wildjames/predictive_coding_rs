@@ -1,14 +1,17 @@
 //! Dataset loading and preprocessing utilities.
 
+use crate::{
+  data_handling::data_handler::TrainingDataset,
+  error::{PredictiveCodingError, Result},
+};
+
 use tracing::{debug, info};
 
 use std::fs::File;
-use std::io::{self, Read, BufReader};
+use std::io::{BufReader, Read};
 use std::path::Path;
 
 use ndarray::{Array1, Array2, s};
-
-use crate::data_handling::data_handler::TrainingDataset;
 
 
 // Homebrew IDX reader, since it's a simple format and I don't want to add a dependency.
@@ -23,13 +26,17 @@ struct IdxData {
 }
 
 /// Load an IDX file into a flattened byte array with metadata.
-fn load_idx<P: AsRef<Path>>(path: P) -> io::Result<IdxData> {
-  let file = File::open(path)?;
+fn load_idx<P: AsRef<Path>>(path: P) -> Result<IdxData> {
+  let path = path.as_ref();
+  let file = File::open(path)
+    .map_err(|source| PredictiveCodingError::io("open IDX file", path, source))?;
   let mut reader = BufReader::new(file);
 
   // Read the magic number (first 4 bytes)
   let mut magic_number_buf = [0u8; 4];
-  reader.read_exact(&mut magic_number_buf)?;
+  reader
+    .read_exact(&mut magic_number_buf)
+    .map_err(|source| PredictiveCodingError::io("read IDX header", path, source))?;
 
   // The first two bytes are always 0, the third byte is the data type, and the fourth byte is the number of dimensions
   let data_type: u8 = magic_number_buf[2];
@@ -42,7 +49,9 @@ fn load_idx<P: AsRef<Path>>(path: P) -> io::Result<IdxData> {
   let mut dimensions = Vec::new();
   for _ in 0..num_dimensions {
     let mut dimension_buf = [0u8; 4];
-    reader.read_exact(&mut dimension_buf)?;
+    reader
+      .read_exact(&mut dimension_buf)
+      .map_err(|source| PredictiveCodingError::io("read IDX dimensions", path, source))?;
     let dimension_size = u32::from_be_bytes(dimension_buf);
     dimensions.push(dimension_size);
     debug!("Dimension size: {}", dimension_size);
@@ -50,7 +59,9 @@ fn load_idx<P: AsRef<Path>>(path: P) -> io::Result<IdxData> {
 
   // Read the data (the rest of the file)
   let mut vector_data = Vec::new();
-  reader.read_to_end(&mut vector_data)?;
+  reader
+    .read_to_end(&mut vector_data)
+    .map_err(|source| PredictiveCodingError::io("read IDX payload", path, source))?;
   // Convert the data to an Array1<u8> for easier handling later
   let data: Array1<u8> = Array1::from(vector_data);
 
@@ -64,25 +75,41 @@ fn load_idx<P: AsRef<Path>>(path: P) -> io::Result<IdxData> {
 
 
 /// Load MNIST images and labels from IDX files.
-pub fn load_mnist<P: AsRef<Path>>(images_path: P, labels_path: P) -> io::Result<TrainingDataset> {
-  info!("Loading MNIST dataset from {} and {}", images_path.as_ref().display(), labels_path.as_ref().display());
+pub fn load_mnist<P: AsRef<Path>>(images_path: P, labels_path: P) -> Result<TrainingDataset> {
+  let images_path = images_path.as_ref();
+  let labels_path = labels_path.as_ref();
+  info!(
+    "Loading MNIST dataset from {} and {}",
+    images_path.display(),
+    labels_path.display()
+  );
 
   let images_idx = load_idx(images_path)?;
   let labels_idx = load_idx(labels_path)?;
 
   // Check that the images are the correct data format. 0x08 is unsigned byte, don't support anything else yet
   if images_idx.data_type != 0x08 || images_idx.num_dimensions != 3 {
-    return Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid image IDX format"));
+    return Err(PredictiveCodingError::invalid_data(format!(
+      "invalid image IDX format in {}",
+      images_path.display()
+    )));
   }
   // Check that the labels are the correct data format
   if labels_idx.data_type != 0x08 || labels_idx.num_dimensions != 1 {
-    return Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid label IDX format"));
+    return Err(PredictiveCodingError::invalid_data(format!(
+      "invalid label IDX format in {}",
+      labels_path.display()
+    )));
   }
 
   let num_images = images_idx.dimensions[0] as usize;
   let num_labels = labels_idx.dimensions[0] as usize;
   if num_labels != num_images {
-    return Err(io::Error::new(io::ErrorKind::InvalidData, "Mismatch between number of images and labels"));
+    return Err(PredictiveCodingError::invalid_data(format!(
+      "mismatch between number of images in {} ({num_images}) and labels in {} ({num_labels})",
+      images_path.display(),
+      labels_path.display()
+    )));
   }
   debug!("Number of images and labels: {}", num_images);
   debug!("Image dimensions: {}x{}", images_idx.dimensions[1], images_idx.dimensions[2]);
@@ -113,13 +140,11 @@ pub fn load_mnist<P: AsRef<Path>>(images_path: P, labels_path: P) -> io::Result<
   }
 
   debug!("Finished parsing MNIST dataset.");
-  Ok(
-    TrainingDataset {
-      dataset_size: num_images,
-      inputs: images,
-      labels,
-      input_size,
-      output_size: 10
-    }
-  )
+  Ok(TrainingDataset {
+    dataset_size: num_images,
+    inputs: images,
+    labels,
+    input_size,
+    output_size: 10,
+  })
 }

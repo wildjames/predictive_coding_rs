@@ -1,14 +1,15 @@
 //! This program takes a trained modek, and evaluates it against the MNIST test dataset, reporting its accuracy, convergence time, and confidence when correct. It also saves these results to a file in the same directory as the model.
 
-use tracing::{info};
 use ndarray::Array1;
-use std::time::Instant;
+use std::{path::Path, time::Instant};
+use tracing::info;
 
 use predictive_coding::{
   data_handling::{
     data_handler::TrainingDataset,
     mnist::load_mnist
   },
+  error::{PredictiveCodingError, Result},
   model_structure::model_utils::{load_model_snapshot},
   utils::logging
 };
@@ -32,23 +33,27 @@ struct EvalArgs {
 }
 
 
-fn main() {
+fn main() -> Result<()> {
   logging::setup_tracing(false);
 
   let args = EvalArgs::parse();
 
-  let mut model = load_model_snapshot(&args.model_file);
+  let mut model = load_model_snapshot(&args.model_file)?;
   info!("Loaded model from {}", args.model_file);
 
 
   let data: TrainingDataset = load_mnist(
       &args.input_idx_file,
       &args.output_idx_file)
-    .unwrap();
+    ?;
   info!(
     "Loaded the MNIST testing dataset. I have {} images",
     data.dataset_size
   );
+
+  if data.dataset_size == 0 {
+    return Err(PredictiveCodingError::invalid_data("evaluation dataset is empty"));
+  }
 
   // The output must be unpinned for evaluation
   // It was probably pinned during training, so just check
@@ -70,7 +75,11 @@ fn main() {
       .row(i)
       .iter()
       .position(|&x| x == 1.0)
-      .unwrap() as u8;
+      .ok_or_else(|| {
+        PredictiveCodingError::invalid_data(format!(
+          "expected one-hot encoded label for sample {i}, but no active class was found"
+        ))
+      })? as u8;
 
     model.reinitialise_latents();
     model.set_input(input_values);
@@ -82,9 +91,9 @@ fn main() {
     let predicted_label = output_activations
       .iter()
       .enumerate()
-      .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+      .max_by(|a, b| a.1.total_cmp(b.1))
       .map(|(i, _)| i)
-      .unwrap();
+      .ok_or_else(|| PredictiveCodingError::invalid_data("model produced an empty output layer"))?;
 
     if (i > 0) && (i % 1000 == 0) {
       info!(
@@ -117,10 +126,16 @@ fn main() {
     mean_confidence
   );
   // Write to a file in the model directory
-  let output_dir = std::path::Path::new(&args.model_file).parent().unwrap();
+  let output_dir = Path::new(&args.model_file)
+    .parent()
+    .filter(|path| !path.as_os_str().is_empty())
+    .unwrap_or_else(|| Path::new("./evaluation_results")); // fallback
+
   let output_path = output_dir.join("evaluation_results.json");
+  let output_file = std::fs::File::create(&output_path)
+    .map_err(|source| PredictiveCodingError::io("create evaluation results", &output_path, source))?;
   serde_json::to_writer_pretty(
-    std::fs::File::create(output_path).unwrap(),
+    output_file,
     &serde_json::json!({
       "accuracy": accuracy,
       "mean_convergence_time_ms": mean_convergence_time,
@@ -130,5 +145,7 @@ fn main() {
       "model_file": args.model_file,
       "config": model.get_config(),
     }),
-  ).unwrap();
+  ).map_err(|source| PredictiveCodingError::json_serialize(&output_path, source))?;
+
+  Ok(())
 }
