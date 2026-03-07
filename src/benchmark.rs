@@ -3,20 +3,11 @@
 use std::time::Instant;
 
 use predictive_coding::{
-  data_handling::data_handler::TrainingDataset,
-  model_structure::model::PredictiveCodingModel,
-  training::{
-    get_handler::get_handler,
+  model_structure::{model::PredictiveCodingModelConfig, model_utils::save_model_config}, training::{
+    setup::setup_training_run_handler,
     train_handler::TrainingHandler,
-    utils::{
-      TrainConfig,
-      load_dataset,
-      load_model,
-      load_training_config,
-      validate_model_and_dataset_shapes
-    }
-  },
-  utils::logging
+    utils::{TrainConfig, save_training_config}
+  }, utils::{logging, timestamp}
 };
 
 use tracing::info;
@@ -31,13 +22,14 @@ struct BenchArgs {
   config: String,
 
   /// Optional artifact output prefix. Defaults to `benchmark_data/<timestamp>/benchmark`.
-  #[arg(long)]
-  output_prefix: Option<String>
+  #[arg(long, default_value_t = format!("benchmark_data/benchmark_{}/bench_", timestamp()))]
+  output_prefix: String
 }
 
 
 fn main() {
   logging::setup_tracing(false);
+  info!("Starting benchmark run");
 
   // Detect if this binary was compiled in release mode or not
   let release_mode: bool = !cfg!(debug_assertions);
@@ -45,42 +37,14 @@ fn main() {
   info!("Running benchmark in debug mode. For more accurate benchmarking, compile with --release");
 
   let args = BenchArgs::parse();
-  let benchmark_config: TrainConfig = load_training_config(&args.config);
-
-  // Run a benchmark model. Random input and output data, inputs are pinned
-  let model: PredictiveCodingModel = load_model(&benchmark_config.model_source);
-  info!(
-    "Created the model with layer sizes {:?}",
-    model.get_layer_sizes()
-  );
-
-  let output_prefix = args.output_prefix.unwrap_or_else(|| {
-    format!("benchmark_data/{}/benchmark", chrono::Utc::now().timestamp())
-  });
-
-  let data: TrainingDataset = load_dataset(&benchmark_config.dataset);
-  info!(
-    "Loaded the dataset. I have {} samples",
-    data.dataset_size
-  );
-
-  if let Err(message) = validate_model_and_dataset_shapes(&model, &data) {
-    panic!("{}", message);
-  }
-
-  // Mkae sure we have the output directory so we dont crash out later
-  let output_dir: &std::path::Path = std::path::Path::new(&output_prefix).parent().unwrap();
-  std::fs::create_dir_all(output_dir).unwrap();
-
-  let mut handler: Box<dyn TrainingHandler> = get_handler(
-    benchmark_config,
-    data,
-    output_prefix.clone()
+  let mut handler: Box<dyn TrainingHandler> = setup_training_run_handler(
+    args.config,
+    args.output_prefix.clone()
   );
 
   let step_data = run_benchmark_training_loop(
     handler.as_mut(),
-    &format!("{}_{}", output_prefix, "bench_run.csv")
+    &format!("{}_{}", &args.output_prefix, "bench_run.csv")
   );
 
   // Write the training params to "{output_prefix}/params.json"
@@ -104,7 +68,7 @@ fn main() {
   // Write the benchmarking parameters, training parameters, and model configuration to files for posterity.
   // This is JSON, so probably a bit harder to read than the CSV file, but it does create a single file with all the relevant information for each benchmark run, which is nice.
   serde_json::to_writer_pretty(
-    std::fs::File::create(format!("{}_{}", output_prefix, "result.json")).unwrap(),
+    std::fs::File::create(format!("{}_{}", args.output_prefix, "result.json")).unwrap(),
     &result
   ).unwrap();
 
@@ -138,6 +102,17 @@ fn run_benchmark_training_loop(
 
   let training_config: &TrainConfig = handler.get_config();
   let training_steps: u32 = training_config.training_steps;
+
+  // Write the config and training params to a file
+  let model_config: &PredictiveCodingModelConfig = &handler.get_model().get_config();
+  save_model_config(
+    model_config,
+    &format!("{}_model_config.json", &handler.get_file_output_prefix())
+  );
+  save_training_config(
+    handler.get_config(),
+    &format!("{}_training_config.json", &handler.get_file_output_prefix())
+  );
 
   for step in 0..training_steps {
 

@@ -4,6 +4,8 @@ use std::{
   process::Command,
 };
 
+use tracing::debug;
+
 pub fn repo_root() -> PathBuf {
   PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
@@ -27,13 +29,14 @@ impl Drop for Cleanup {
 }
 
 pub fn prepare_smoke_root(test_name: &str) -> (PathBuf, Cleanup) {
-  let smoke_root = repo_root().join("target").join(test_name);
+  let smoke_root = repo_root().join("data/tests").join(test_name);
   let _ = fs::remove_dir_all(&smoke_root);
   let cleanup = Cleanup::new(vec![smoke_root.clone()]);
   (smoke_root, cleanup)
 }
 
 pub fn run_command(command: &mut Command) {
+  debug!("Running command: {:?}", command);
   let output = command.output().unwrap();
   assert!(
     output.status.success(),
@@ -46,6 +49,10 @@ pub fn run_command(command: &mut Command) {
 
 #[allow(dead_code)]
 pub fn assert_json_files_equal(actual: &Path, expected: &Path) {
+  // Check that both files exist
+  assert!(actual.exists(), "actual file {} does not exist", actual.display());
+  assert!(expected.exists(), "expected file {} does not exist", expected.display());
+
   let actual_json = read_json(actual);
   let expected_json = read_json(expected);
   assert_eq!(

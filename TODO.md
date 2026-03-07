@@ -46,12 +46,9 @@ There is one place that prepares a training or benchmark run: config loading, mo
 
 ### Tasks
 
-- [ ] Introduce an application-layer module, for example `src/app/` or `src/experiment/`.
-- [ ] Move shared startup logic out of `src/train.rs` and `src/benchmark.rs`.
-- [ ] Replace duplicated dataset/model compatibility checks with one validation function.
-- [ ] Use a single handler factory in both training and benchmarking code paths.
-- [ ] Return a structured setup object such as `PreparedTrainingRun` or `PreparedExperiment`.
-- [ ] Move output-prefix creation into the same setup layer so file layout is defined in one place.
+- [x] Move shared startup logic out of `src/train.rs` and `src/benchmark.rs`.
+- [x] Replace duplicated dataset/model compatibility checks with one validation function.
+- [x] Use a single handler factory in both training and benchmarking code paths.
 
 ## Phase 3: Replace Panic-Driven Boundaries
 

@@ -11,6 +11,7 @@ use common::{assert_json_files_equal, prepare_smoke_root, repo_root, run_command
 fn run_train(config: &str, output_prefix: &Path) {
   let root = repo_root();
   run_command(
+    // https://doc.rust-lang.org/cargo/reference/environment-variables.html
     Command::new(env!("CARGO_BIN_EXE_train"))
       .current_dir(&root)
       .arg(config)
@@ -31,13 +32,13 @@ fn train_single_thread_binary_smoke_on_tiny_fixtures() {
   let final_model: PathBuf = train_dir.join("model_final_model.json");
   assert!(final_model.exists());
   assert!(train_dir.join("model_training_config.json").exists());
-  assert!(train_dir.join("model_config.json").exists());
+  assert!(train_dir.join("model_model_config.json").exists());
   assert!(train_dir.join("model_snapshot_step_0.json").exists());
   assert!(train_dir.join("model_snapshot_step_1.json").exists());
 
   assert_json_files_equal(
-    &train_dir.join("model_config.json"),
-    &root.join("test_data/baselines/single_thread/train/model_config.json"),
+    &train_dir.join("model_model_config.json"),
+    &root.join("test_data/baselines/single_thread/train/model_model_config.json"),
   );
   assert_json_files_equal(
     &train_dir.join("model_training_config.json"),

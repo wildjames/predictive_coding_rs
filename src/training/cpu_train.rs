@@ -3,21 +3,12 @@
 use crate::{
   data_handling::data_handler,
   model_structure::{
-    model::{
-      PredictiveCodingModel,
-      PredictiveCodingModelConfig
-    },
-    model_utils::{
-      save_model_config,
-      set_rand_input_and_output
-    }
+    model::PredictiveCodingModel,
+    model_utils::set_rand_input_and_output
   },
   training::{
     train_handler::TrainingHandler,
-    utils::{
-      TrainConfig,
-      save_training_config
-    },
+    utils::TrainConfig,
   }
 };
 
@@ -65,33 +56,6 @@ impl TrainingHandler for SingleThreadTrainHandler {
 
   fn pre_training_hook(&mut self) {
     info!("Starting training with single-threaded strategy");
-    info!(
-      "Training parameters:\n\ttraining steps: {}\n\treporting interval: {}\n\tsnapshot interval: {}",
-      self.config.training_steps,
-      self.config.report_interval,
-      self.config.snapshot_interval
-    );
-
-    let model_config: &PredictiveCodingModelConfig = &self.model.get_config();
-    info!(
-      "Model architecture:\n\tlayer sizes: {:?}\n\tgamma: {}\n\talpha: {}\n\tactivation function: {:?}\n\tconvergence steps: {}\n\tconvergence threshold: {}",
-      model_config.layer_sizes,
-      model_config.gamma,
-      model_config.alpha,
-      model_config.activation_function,
-      model_config.convergence_steps,
-      model_config.convergence_threshold
-    );
-
-    // Write the config and training params to a file
-    save_model_config(
-      model_config,
-      &format!("{}_config.json", &self.file_output_prefix)
-    );
-    save_training_config(
-      &self.config,
-      &format!("{}_training_config.json", &self.file_output_prefix)
-    );
   }
 
   fn train_step(&mut self, _step: u32) {
@@ -155,32 +119,8 @@ impl TrainingHandler for BatchTrainHandler {
   fn pre_training_hook(&mut self) {
     info!("Starting training with mini-batch strategy");
     info!(
-      "Training parameters:\n\ttraining steps: {}\n\tbatch size: {}\n\treporting interval: {}\n\tsnapshot interval: {}",
-      self.config.training_steps,
-      self.batch_size,
-      self.config.report_interval,
-      self.config.snapshot_interval
-    );
-
-    let model_config: &PredictiveCodingModelConfig = &self.model.get_config();
-    info!(
-      "Model architecture:\n\tlayer sizes: {:?}\n\tgamma: {}\n\talpha: {}\n\tactivation function: {:?}\n\tconvergence steps: {}\n\tconvergence threshold: {}",
-      model_config.layer_sizes,
-      model_config.gamma,
-      model_config.alpha,
-      model_config.activation_function,
-      model_config.convergence_steps,
-      model_config.convergence_threshold
-    );
-
-    // Write the config and training params to a file
-    save_model_config(
-      model_config,
-      &format!("{}_model_config.json", &self.file_output_prefix)
-    );
-    save_training_config(
-      &self.config,
-      &format!("{}_training_config.json", &self.file_output_prefix)
+      "Mini batch params: batch size = {}",
+      self.batch_size
     );
   }
 
