@@ -25,7 +25,8 @@
         "timonwong.shellcheck",
         "vadimcn.vscode-lldb",
         "hastur-dev.cargo-fl",
-        "JScearcy.rust-doc-viewer"
+        "JScearcy.rust-doc-viewer",
+        "bierner.github-markdown-preview"
       ],
       "settings": {
         "editor.formatOnPaste": false,
