@@ -57,9 +57,9 @@ pub struct TrainConfig {
 
   /// Training steps
   pub training_steps: u32,
-  /// Report interval (default to 1_000)
+  /// Report interval
   pub report_interval: u32,
-  /// Snapshot interval (default to 10_000)
+  /// Snapshot interval
   pub snapshot_interval: u32,
 }
 

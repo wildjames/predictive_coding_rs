@@ -3,18 +3,13 @@
 use std::time::Instant;
 
 use predictive_coding::{
-  data_handling::{
-    data_handler::TrainingDataset,
-    mnist::load_mnist
-  },
+  data_handling::data_handler::TrainingDataset,
   model_structure::model::PredictiveCodingModel,
   training::{
     get_handler::get_handler,
     train_handler::TrainingHandler,
     utils::{
-      TrainConfig,
-      load_model,
-      load_training_config
+      TrainConfig, load_dataset, load_model, load_training_config
     }
   },
   utils::logging
@@ -53,14 +48,22 @@ fn main() {
 
   let output_prefix = format!("benchmark_data/{}/benchmark", chrono::Utc::now().timestamp());
 
-  let data: TrainingDataset = load_mnist(
-      "data/mnist/train-images-idx3-ubyte",
-      "data/mnist/train-labels-idx1-ubyte")
-    .unwrap();
+  let data: TrainingDataset = load_dataset(&benchmark_config.dataset);
   info!(
-    "Loaded the MNIST dataset. I have {} images",
+    "Loaded the dataset. I have {} samples",
     data.dataset_size
   );
+
+  // Check that the data and model are compatible
+  let layer_sizes = model.get_layer_sizes();
+  let model_input_size = layer_sizes.first().unwrap();
+  let model_output_size = layer_sizes.last().unwrap();
+  if data.inputs.shape()[1] != *model_input_size {
+    panic!("Model input size {} does not match dataset input size {}", model_input_size, data.inputs.shape()[1]);
+  }
+  if data.labels.shape()[1] != *model_output_size {
+    panic!("Model output size {} does not match dataset output size {}", model_output_size, data.labels.shape()[1]);
+  }
 
   // Mkae sure we have the output directory so we dont crash out later
   let output_dir: &std::path::Path = std::path::Path::new(&output_prefix).parent().unwrap();
