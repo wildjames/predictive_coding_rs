@@ -21,6 +21,14 @@ struct EvalArgs {
   /// The model file to evaluate
   #[arg()]
   model_file: String,
+
+  /// IDX image file to evaluate against.
+  #[arg(long, default_value_t = String::from("data/mnist/t10k-images-idx3-ubyte"))]
+  input_idx_file: String,
+
+  /// IDX label file to evaluate against.
+  #[arg(long, default_value_t = String::from("data/mnist/t10k-labels-idx1-ubyte"))]
+  output_idx_file: String,
 }
 
 
@@ -34,8 +42,8 @@ fn main() {
 
 
   let data: TrainingDataset = load_mnist(
-      "data/mnist/t10k-images-idx3-ubyte",
-      "data/mnist/t10k-labels-idx1-ubyte")
+      &args.input_idx_file,
+      &args.output_idx_file)
     .unwrap();
   info!(
     "Loaded the MNIST testing dataset. I have {} images",

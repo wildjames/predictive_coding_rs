@@ -69,3 +69,194 @@ pub fn run_supervised_training_loop(handler: &mut dyn TrainingHandler) {
 
   handler.post_training_hook();
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  use crate::{
+    model_structure::{
+      model::PredictiveCodingModelConfig,
+      model_utils::ActivationFunction
+    },
+    training::utils::{
+      DataSetSource,
+      ModelSource,
+      TrainingStrategy
+    }
+  };
+  use ndarray::Array2;
+  use std::{
+    fs,
+    path::PathBuf,
+    time::{SystemTime, UNIX_EPOCH}
+  };
+
+  struct TempDir {
+    path: PathBuf,
+  }
+
+  impl TempDir {
+    fn new(prefix: &str) -> Self {
+      let unique_id = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+      let path = std::env::temp_dir().join(format!(
+        "predictive_coding_{prefix}_{}_{}",
+        std::process::id(),
+        unique_id
+      ));
+      fs::create_dir_all(&path).unwrap();
+      TempDir { path }
+    }
+
+    fn path(&self) -> &PathBuf {
+      &self.path
+    }
+  }
+
+  impl Drop for TempDir {
+    fn drop(&mut self) {
+      let _ = fs::remove_dir_all(&self.path);
+    }
+  }
+
+  struct RecordingHandler {
+    config: TrainConfig,
+    model: PredictiveCodingModel,
+    data: data_handler::TrainingDataset,
+    file_output_prefix: String,
+    events: Vec<String>,
+  }
+
+  impl RecordingHandler {
+    fn new(config: TrainConfig, output_prefix: String) -> Self {
+      let model: PredictiveCodingModel = PredictiveCodingModel::new(&PredictiveCodingModelConfig {
+        layer_sizes: vec![4, 10],
+        alpha: 0.01,
+        gamma: 0.05,
+        convergence_threshold: 0.0,
+        convergence_steps: 1,
+        activation_function: ActivationFunction::Relu,
+      });
+      let data: data_handler::TrainingDataset = data_handler::TrainingDataset {
+        dataset_size: 1,
+        input_size: 4,
+        output_size: 10,
+        inputs: Array2::zeros((1, 4)),
+        labels: Array2::zeros((1, 10)),
+      };
+
+      RecordingHandler {
+        config,
+        model,
+        data,
+        file_output_prefix: output_prefix,
+        events: Vec::new(),
+      }
+    }
+  }
+
+  // Construct a dummy handler which just records what it's done, in what order.
+  impl TrainingHandler for RecordingHandler {
+    fn get_config(&self) -> &TrainConfig {
+      &self.config
+    }
+
+    fn get_model(&mut self) -> &mut PredictiveCodingModel {
+      &mut self.model
+    }
+
+    fn get_data(&self) -> &data_handler::TrainingDataset {
+      &self.data
+    }
+
+    fn get_file_output_prefix(&self) -> &String {
+      &self.file_output_prefix
+    }
+
+    fn pre_training_hook(&mut self) {
+      self.events.push(String::from("pre_training"));
+    }
+
+    fn train_step(&mut self, step: u32) {
+      self.events.push(format!("train_step:{step}"));
+    }
+
+    fn report_hook(&mut self, step: u32) {
+      self.events.push(format!("report:{step}"));
+    }
+
+    fn pre_step_hook(&mut self, step: u32) {
+      self.events.push(format!("pre_step:{step}"));
+    }
+
+    fn post_step_hook(&mut self, step: u32) {
+      self.events.push(format!("post_step:{step}"));
+    }
+
+    fn post_training_hook(&mut self) {
+      self.events.push(String::from("post_training"));
+      let final_output_path = format!("{}_final_model.json", self.get_file_output_prefix());
+      save_model_snapshot(self.get_model(), &final_output_path);
+    }
+  }
+
+  fn test_config(training_steps: u32, report_interval: u32, snapshot_interval: u32) -> TrainConfig {
+    TrainConfig {
+      model_source: ModelSource::Config(String::from("unused.json")),
+      dataset: DataSetSource::MNIST {
+        input_idx_file: String::from("unused-images.idx"),
+        output_idx_file: String::from("unused-labels.idx"),
+      },
+      training_strategy: TrainingStrategy::SingleThread,
+      training_steps,
+      report_interval,
+      snapshot_interval,
+    }
+  }
+
+  #[test]
+  fn training_loop_preserves_hook_order_and_report_interval() {
+    let temp_dir: TempDir = TempDir::new("training_loop_hooks");
+    let output_prefix: String = temp_dir.path().join("model").display().to_string();
+    let mut handler: RecordingHandler = RecordingHandler::new(test_config(3, 2, 0), output_prefix);
+
+    run_supervised_training_loop(&mut handler);
+
+    assert_eq!(
+      handler.events,
+      vec![
+        String::from("pre_training"),
+        String::from("pre_step:0"),
+        String::from("train_step:0"),
+        String::from("post_step:0"),
+        String::from("report:0"),
+        String::from("pre_step:1"),
+        String::from("train_step:1"),
+        String::from("post_step:1"),
+        String::from("pre_step:2"),
+        String::from("train_step:2"),
+        String::from("post_step:2"),
+        String::from("report:2"),
+        String::from("post_training"),
+      ]
+    );
+  }
+
+  #[test]
+  fn training_loop_saves_snapshots_at_configured_steps() {
+    let temp_dir = TempDir::new("training_loop_snapshots");
+    let output_prefix = temp_dir.path().join("model").display().to_string();
+    let mut handler = RecordingHandler::new(test_config(5, 0, 2), output_prefix.clone());
+
+    run_supervised_training_loop(&mut handler);
+
+    assert!(temp_dir.path().join("model_snapshot_step_0.json").exists());
+    assert!(!temp_dir.path().join("model_snapshot_step_1.json").exists());
+    assert!(temp_dir.path().join("model_snapshot_step_2.json").exists());
+    assert!(temp_dir.path().join("model_snapshot_step_4.json").exists());
+    assert!(temp_dir.path().join("model_final_model.json").exists());
+  }
+}

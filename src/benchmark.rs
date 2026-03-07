@@ -9,7 +9,11 @@ use predictive_coding::{
     get_handler::get_handler,
     train_handler::TrainingHandler,
     utils::{
-      TrainConfig, load_dataset, load_model, load_training_config
+      TrainConfig,
+      load_dataset,
+      load_model,
+      load_training_config,
+      validate_model_and_dataset_shapes
     }
   },
   utils::logging
@@ -25,6 +29,10 @@ struct BenchArgs {
   /// The model configuration to benchmark.
   #[arg(default_value_t = String::from("benchmark_data/benchmark_config.json"))]
   config: String,
+
+  /// Optional artifact output prefix. Defaults to `benchmark_data/<timestamp>/benchmark`.
+  #[arg(long)]
+  output_prefix: Option<String>
 }
 
 
@@ -46,7 +54,9 @@ fn main() {
     model.get_layer_sizes()
   );
 
-  let output_prefix = format!("benchmark_data/{}/benchmark", chrono::Utc::now().timestamp());
+  let output_prefix = args.output_prefix.unwrap_or_else(|| {
+    format!("benchmark_data/{}/benchmark", chrono::Utc::now().timestamp())
+  });
 
   let data: TrainingDataset = load_dataset(&benchmark_config.dataset);
   info!(
@@ -54,15 +64,8 @@ fn main() {
     data.dataset_size
   );
 
-  // Check that the data and model are compatible
-  let layer_sizes = model.get_layer_sizes();
-  let model_input_size = layer_sizes.first().unwrap();
-  let model_output_size = layer_sizes.last().unwrap();
-  if data.inputs.shape()[1] != *model_input_size {
-    panic!("Model input size {} does not match dataset input size {}", model_input_size, data.inputs.shape()[1]);
-  }
-  if data.labels.shape()[1] != *model_output_size {
-    panic!("Model output size {} does not match dataset output size {}", model_output_size, data.labels.shape()[1]);
+  if let Err(message) = validate_model_and_dataset_shapes(&model, &data) {
+    panic!("{}", message);
   }
 
   // Mkae sure we have the output directory so we dont crash out later

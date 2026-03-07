@@ -5,50 +5,15 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Debug executable 'generate'",
-      "type": "lldb",
-      "request": "launch",
-      "cargo": {
-        "args": [
-          "run",
-          "--bin=generate"
-        ]
-      },
-      "args": [
-        "data/model_"
-      ]
-    },
-    {
-      "name": "Debug executable 'infer'",
-      "type": "lldb",
-      "request": "launch",
-      "cargo": {
-        "args": [
-          "run",
-          "--bin=infer"
-        ]
-      },
-      "args": []
-    },
-    {
-      "name": "Debug unit tests in executable 'infer'",
-      "type": "lldb",
-      "request": "launch",
-      "cargo": {
-        "args": [
-          "test",
-          "--bin=infer"
-        ]
-      }
-    },
-    {
       "name": "Debug executable 'train'",
       "type": "lldb",
       "request": "launch",
       "cargo": {
         "args": [
           "run",
-          "--bin=train"
+          "--bin=train",
+          "--",
+          "data/training_config.json"
         ]
       },
       "args": []
@@ -61,6 +26,60 @@
         "args": [
           "test",
           "--bin=train"
+        ]
+      }
+    },
+    {
+      "name": "Debug executable 'bench'",
+      "type": "lldb",
+      "request": "launch",
+      "cargo": {
+        "args": [
+          "run",
+          "--bin=bench",
+          "--",
+          "data/training_config.json"
+        ]
+      },
+      "args": []
+    },
+    {
+      "name": "Debug unit tests in executable 'bench'",
+      "type": "lldb",
+      "request": "launch",
+      "cargo": {
+        "args": [
+          "test",
+          "--bin=bench"
+        ]
+      }
+    },
+    {
+      "name": "Debug executable 'eval'",
+      "type": "lldb",
+      "request": "launch",
+      "cargo": {
+        "args": [
+          "run",
+          "--bin=eval",
+          "--",
+          "data/model_1772887557/model_final_model.json",
+          "--input-idx-file",
+          "data/mnist/t10k-images-idx3-ubyte",
+          "--output-idx-file",
+          "data/mnist/t10k-labels-idx1-ubyte"
+        ]
+      },
+      "args": []
+    },
+    {
+      "name": "Debug unit tests in executable 'eval'",
+      "type": "lldb",
+      "request": "launch",
+      "cargo": {
+        "args": [
+          "test",
+          "--bin=eval"
         ]
       }
     }

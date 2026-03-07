@@ -1,0 +1,15 @@
+{
+  "step_data": [
+    {
+      "step": 0,
+      "time_ms": 0.040753998
+    },
+    {
+      "step": 1,
+      "time_ms": 0.008644001
+    }
+  ],
+  "git_commit_hash": "67a2b02e0bc149b539168a20b2c456812fc1dce7",
+  "run_timestamp": "2026-03-07T15:08:31.075468185+00:00",
+  "release_mode": true
+}
