@@ -15,19 +15,10 @@ path = "src/train.rs"
 name = "eval"
 path = "src/evaluate.rs"
 
-[[bin]]
-name = "generate"
-path = "src/generate.rs"
-
-[[example]]
-name = "test-load-data"
-path = "examples/test_load_data.rs"
-
 [dependencies]
 chrono = "0.4.44"
 clap = { version = "4.5.60", features = ["derive"] }
 csv = "1.4.0"
-image = "0.25.9"
 ndarray = { version = "0.17.2", features = ["serde"] }
 rand = "0.10.0"
 rayon = "1.11.0"

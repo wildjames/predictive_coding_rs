@@ -3,7 +3,10 @@ use ndarray::Array1;
 use std::time::Instant;
 
 use predictive_coding::{
-  data_handling::data_handler,
+  data_handling::{
+    data_handler::TrainingDataset,
+    mnist::load_mnist
+  },
   model_structure::model_utils::{load_model_snapshot},
   utils::logging
 };
@@ -14,7 +17,7 @@ use clap::Parser;
 #[derive(Parser)]
 struct EvalArgs {
   /// The model file to evaluate
-  #[arg(short, long)]
+  #[arg()]
   model_file: String,
 }
 
@@ -28,7 +31,7 @@ fn main() {
   info!("Loaded model from {}", args.model_file);
 
 
-  let data: data_handler::TrainingDataset = data_handler::load_mnist(
+  let data: TrainingDataset = load_mnist(
       "data/mnist/t10k-images-idx3-ubyte",
       "data/mnist/t10k-labels-idx1-ubyte")
     .unwrap();
@@ -50,10 +53,14 @@ fn main() {
   for i in 0..data.dataset_size {
     let input_values: Array1<f32> = data.inputs
       .row(i)
-      .mapv(|x| x as f32 / 255.0)
       .to_owned();
 
-    let output_label = data.labels[i];
+    // MNIST is one-hot encoded on the output layer
+    let output_label = data.labels
+      .row(i)
+      .iter()
+      .position(|&x| x == 1.0)
+      .unwrap() as u8;
 
     model.reinitialise_latents();
     model.set_input(input_values);
@@ -69,7 +76,7 @@ fn main() {
       .map(|(i, _)| i)
       .unwrap();
 
-    if i > 0 && i % 1000 == 0 {
+    if (i > 0) && (i % 1000 == 0) {
       info!(
         "Current accuracy after {} samples: {:.2}%",
         i,

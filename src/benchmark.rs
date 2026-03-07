@@ -1,7 +1,10 @@
 use std::time::Instant;
 
 use predictive_coding::{
-  data_handling::data_handler,
+  data_handling::{
+    data_handler::TrainingDataset,
+    mnist::load_mnist
+  },
   model_structure::model::PredictiveCodingModel,
   training::{
     get_handler::get_handler,
@@ -46,7 +49,7 @@ fn main() {
 
   let output_prefix = format!("benchmark_data/{}/benchmark", chrono::Utc::now().timestamp());
 
-  let data: data_handler::TrainingDataset = data_handler::load_mnist(
+  let data: TrainingDataset = load_mnist(
       "data/mnist/train-images-idx3-ubyte",
       "data/mnist/train-labels-idx1-ubyte")
     .unwrap();
