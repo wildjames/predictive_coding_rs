@@ -1,19 +1,18 @@
-use crate::model_structure::{
-  model::{PredictiveCodingModel}
-};
+use crate::model_structure::model::{PredictiveCodingModel};
 use crate::data_handling::data_handler;
+use crate::model_structure::model_utils::{create_from_config, load_model_snapshot};
 
 use serde::{Deserialize, Serialize};
 use ndarray::Array1;
 
 pub fn set_rand_input_and_output(
   model: &mut PredictiveCodingModel,
-  data: &data_handler::ImagesBWDataset
+  data: &data_handler::TrainingDataset
 ) {
-  let rand_index = usize::from_ne_bytes(rand::random()) % data.num_images;
+  let rand_index = usize::from_ne_bytes(rand::random()) % data.dataset_size;
 
   // Normalise to the range 0..1
-  let input_values: Array1<f32> = data.images
+  let input_values: Array1<f32> = data.inputs
     .row(rand_index)
     .mapv(|x| x as f32 / 255.0)
     .to_owned();
@@ -30,17 +29,32 @@ pub fn set_rand_input_and_output(
 
 }
 
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub enum TrainingStrategy {
+  SingleThread,
+  MiniBatch { batch_size: u32 }
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub enum ModelSource {
+  Config(String),
+  Snapshot(String)
+}
+
+pub fn load_model(model_source: &ModelSource) -> PredictiveCodingModel {
+  match model_source {
+    ModelSource::Config(config) => create_from_config(config),
+    ModelSource::Snapshot(path) => load_model_snapshot(path)
+  }
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct TrainConfig {
-  /// Path to model config file
-  pub model_config: Option<String>,
-  /// Path to model snapshot file
-  pub snapshot: Option<String>,
+  /// Path to model config file or snapshot
+  pub model_source: ModelSource,
 
-  /// Enable mini-batch for training
-  pub mini_batch_enabled: bool,
-  /// Mini batch size for multithreaded training
-  pub batch_size: Option<u32>,
+  /// What training strategy to use
+  pub training_strategy: TrainingStrategy,
 
   /// Training steps
   pub training_steps: u32,
@@ -57,12 +71,6 @@ pub fn load_training_config(config_path: &str) -> TrainConfig {
   let training_config: TrainConfig = serde_json::from_str(&config_str).expect(
     "Failed to parse training config file. Please ensure it is a valid JSON file with the correct fields."
   );
-
-
-  // Assert that we have only config or snapshot
-  if training_config.model_config.is_some() == training_config.snapshot.is_some() {
-    panic!("Exactly one of --config and --snapshot must be provided");
-  }
 
   training_config
 }

@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use predictive_coding::{
   data_handling::data_handler,
-  model_structure::model_utils::{load_model},
+  model_structure::model_utils::{load_model_snapshot},
   utils::logging
 };
 
@@ -24,17 +24,17 @@ fn main() {
 
   let args = EvalArgs::parse();
 
-  let mut model = load_model(&args.model_file);
+  let mut model = load_model_snapshot(&args.model_file);
   info!("Loaded model from {}", args.model_file);
 
 
-  let data: data_handler::ImagesBWDataset = data_handler::load_mnist(
+  let data: data_handler::TrainingDataset = data_handler::load_mnist(
       "data/mnist/t10k-images-idx3-ubyte",
       "data/mnist/t10k-labels-idx1-ubyte")
     .unwrap();
   info!(
     "Loaded the MNIST testing dataset. I have {} images",
-    data.num_images
+    data.dataset_size
   );
 
   // The output must be unpinned for evaluation
@@ -47,8 +47,8 @@ fn main() {
   let mut sum_covnvergence_time: f32 = 0.0;
 
   // TODO: Multithread this
-  for i in 0..data.num_images {
-    let input_values: Array1<f32> = data.images
+  for i in 0..data.dataset_size {
+    let input_values: Array1<f32> = data.inputs
       .row(i)
       .mapv(|x| x as f32 / 255.0)
       .to_owned();

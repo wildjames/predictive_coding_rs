@@ -5,7 +5,7 @@ use tracing::{error, info};
 use ndarray::Array1;
 
 use predictive_coding::{
-  model_structure::model_utils::{load_model},
+  model_structure::model_utils::load_model_snapshot,
   utils::logging
 };
 
@@ -20,7 +20,7 @@ fn main() {
   }
 
   let model_fname = args[1].clone();
-  let mut model = load_model(&model_fname);
+  let mut model = load_model_snapshot(&model_fname);
   info!("Loaded model from {}", model_fname);
 
   model.unpin_input();

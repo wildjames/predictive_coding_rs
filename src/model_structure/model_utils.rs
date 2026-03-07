@@ -29,7 +29,7 @@ pub fn save_model_config(
   std::fs::write(filename, config_ser).unwrap();
 }
 
-pub fn save_model(
+pub fn save_model_snapshot(
   model: &PredictiveCodingModel,
   filename: &str
 ) {
@@ -41,7 +41,7 @@ pub fn save_model(
   std::fs::write(filename, model_ser).unwrap();
 }
 
-pub fn load_model(filename: &str) -> PredictiveCodingModel {
+pub fn load_model_snapshot(filename: &str) -> PredictiveCodingModel {
   let model_ser = std::fs::read_to_string(filename).unwrap();
   serde_json::from_str(&model_ser).unwrap()
 }
