@@ -1,0 +1,15 @@
+{
+  "model_source": {
+    "Snapshot": "test_data/model_snapshot_tiny.json"
+  },
+  "dataset": {
+    "MNIST": {
+      "input_idx_file": "test_data/mnist/train-images-idx3-ubyte",
+      "output_idx_file": "test_data/mnist/train-labels-idx1-ubyte"
+    }
+  },
+  "training_strategy": "SingleThread",
+  "training_steps": 2,
+  "report_interval": 1,
+  "snapshot_interval": 1
+}
