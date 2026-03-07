@@ -242,3 +242,91 @@ impl TrainingHandler for BatchTrainHandler {
     info!("Step {}: Current model state: energy = {:.2}", step, energy);
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  use crate::model_structure::{
+    model::PredictiveCodingModelConfig,
+    model_utils::ActivationFunction
+  };
+  use crate::training::utils::TrainingStrategy;
+  use ndarray::{array, Array2};
+
+  fn dummy_config() -> TrainConfig {
+    TrainConfig {
+      model_source: crate::training::utils::ModelSource::Snapshot(String::from("unused.json")),
+      dataset: crate::training::utils::DataSetSource::MNIST {
+        input_idx_file: String::from("unused-images.idx"),
+        output_idx_file: String::from("unused-labels.idx"),
+      },
+      training_strategy: TrainingStrategy::SingleThread,
+      training_steps: 1,
+      report_interval: 0,
+      snapshot_interval: 0,
+    }
+  }
+
+  fn tiny_model() -> PredictiveCodingModel {
+    PredictiveCodingModel::new(&PredictiveCodingModelConfig {
+      layer_sizes: vec![4, 10],
+      alpha: 0.01,
+      gamma: 0.05,
+      convergence_threshold: 0.0,
+      convergence_steps: 1,
+      activation_function: ActivationFunction::Relu,
+    })
+  }
+
+  fn tiny_dataset() -> data_handler::TrainingDataset {
+    let mut labels: Array2<f32> = Array2::zeros((1, 10));
+    labels.row_mut(0).assign(&array![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+
+    data_handler::TrainingDataset {
+      dataset_size: 1,
+      input_size: 4,
+      output_size: 10,
+      inputs: array![[1.0, 0.0, 0.5, 0.25]],
+      labels,
+    }
+  }
+
+  fn assert_arrays_close(left: &Array2<f32>, right: &Array2<f32>, tolerance: f32) {
+    assert_eq!(left.dim(), right.dim());
+    for (left_value, right_value) in left.iter().zip(right.iter()) {
+      assert!(
+        (left_value - right_value).abs() <= tolerance,
+        "expected {left_value} and {right_value} to be within {tolerance}"
+      );
+    }
+  }
+
+  #[test]
+  fn minibatch_aggregation_matches_single_sample_update_on_deterministic_fixture() {
+    let initial_model: PredictiveCodingModel = tiny_model();
+    let dataset: data_handler::TrainingDataset = tiny_dataset();
+    let config: TrainConfig = dummy_config();
+
+    let mut single_handler: SingleThreadTrainHandler = SingleThreadTrainHandler::new(
+      config.clone(),
+      initial_model.clone(),
+      dataset.clone(),
+      String::from("unused/single"),
+    );
+    let mut batch_handler: BatchTrainHandler = BatchTrainHandler::new(
+      config,
+      initial_model,
+      dataset,
+      String::from("unused/batch"),
+      4,
+    );
+
+    single_handler.train_step(0);
+    batch_handler.train_step(0);
+
+    let single_weights = &single_handler.get_model().get_layer(1).weights;
+    let batch_weights = &batch_handler.get_model().get_layer(1).weights;
+    assert_arrays_close(single_weights, batch_weights, 1e-6);
+  }
+}

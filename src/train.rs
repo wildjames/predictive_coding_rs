@@ -14,6 +14,7 @@ use predictive_coding::{
     utils::{
       TrainConfig,
       TrainingStrategy,
+      validate_model_and_dataset_shapes,
       load_dataset,
       load_model,
       load_training_config
@@ -31,7 +32,11 @@ use tracing::info;
 struct TrainArgs {
   /// Path to training config file
   #[arg()]
-  config: String
+  config: String,
+
+  /// Optional artifact output prefix. Defaults to `data/model_<timestamp>/model`.
+  #[arg(long)]
+  output_prefix: Option<String>
 }
 
 /// Entry point for loading data, building the model, and running training.
@@ -54,22 +59,17 @@ fn main() {
     model.get_layer_sizes()
   );
 
-  // Check that the data and model are compatible
-  let layer_sizes = model.get_layer_sizes();
-  let model_input_size = layer_sizes.first().unwrap();
-  let model_output_size = layer_sizes.last().unwrap();
-  if data.inputs.shape()[1] != *model_input_size {
-    panic!("Model input size {} does not match dataset input size {}", model_input_size, data.inputs.shape()[1]);
-  }
-  if data.labels.shape()[1] != *model_output_size {
-    panic!("Model output size {} does not match dataset output size {}", model_output_size, data.labels.shape()[1]);
+  if let Err(message) = validate_model_and_dataset_shapes(&model, &data) {
+    panic!("{}", message);
   }
 
   // Where to put stuff
-  let file_output_prefix: String = format!(
-    "data/model_{}/model",
-    chrono::Utc::now().timestamp()
-  );
+  let file_output_prefix: String = args.output_prefix.unwrap_or_else(|| {
+    format!(
+      "data/model_{}/model",
+      chrono::Utc::now().timestamp()
+    )
+  });
 
   // The handler orchestrated the training process by providing hook functions to the training loop.
   // Choose the correct one for this config.

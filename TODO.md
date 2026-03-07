@@ -26,13 +26,12 @@ Refactors can proceed without guessing whether behavior changed.
 
 ### Tasks
 
-- [ ] Add unit tests for training-config parsing, model-config parsing, and invalid-shape rejection.
-- [ ] Add snapshot round-trip tests for model serialization and deserialization.
-- [ ] Add tests for training-loop behavior: report intervals, snapshot intervals, and hook ordering.
-- [ ] Add tests for mini-batch aggregation behavior on a tiny deterministic fixture.
-- [ ] Add a smoke test path for the `train`, `bench`, and `eval` binaries using very small test data or fixtures.
-  - [ ] Test data should go in a `test_data` directory, not the main `data` one.
-- [ ] Record baseline benchmark results and baseline training run artifacts for each current strategy, for comparison during refactors.
+- [x] Add unit tests for training-config parsing, model-config parsing, and invalid-shape rejection.
+- [x] Add snapshot round-trip tests for model serialization and deserialization.
+- [x] Add tests for training-loop behavior: report intervals, snapshot intervals, and hook ordering.
+- [x] Add tests for mini-batch aggregation behavior on a tiny deterministic fixture.
+- [x] Add a smoke test path for the `train`, `bench`, and `eval` binaries using very small test data or fixtures.
+  - [x] Test data should go in a `test_data` directory, not the main `data` one.
 
 ### Notes
 

@@ -35,10 +35,14 @@ pub fn set_rand_input_and_output(
 
 }
 
-pub fn create_from_config(fname: &str) -> PredictiveCodingModel {
-  let config: PredictiveCodingModelConfig = serde_json::from_reader(
+pub fn load_model_config(fname: &str) -> PredictiveCodingModelConfig {
+  serde_json::from_reader(
     std::fs::File::open(fname).unwrap()
-  ).unwrap();
+  ).unwrap()
+}
+
+pub fn create_from_config(fname: &str) -> PredictiveCodingModel {
+  let config = load_model_config(fname);
   PredictiveCodingModel::new(&config)
 }
 
@@ -162,6 +166,47 @@ pub fn tanh_derivative(x: f32) -> f32 {
 mod tests {
   use super::*;
 
+  use ndarray::array;
+  use std::{
+    fs,
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH}
+  };
+
+  struct TempDir {
+    path: PathBuf,
+  }
+
+  impl TempDir {
+    fn new(prefix: &str) -> Self {
+      let unique_id = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+      let path = std::env::temp_dir().join(format!(
+        "predictive_coding_{prefix}_{}_{}",
+        std::process::id(),
+        unique_id
+      ));
+      fs::create_dir_all(&path).unwrap();
+      TempDir { path }
+    }
+
+    fn join(&self, filename: &str) -> PathBuf {
+      self.path.join(filename)
+    }
+  }
+
+  impl Drop for TempDir {
+    fn drop(&mut self) {
+      let _ = fs::remove_dir_all(&self.path);
+    }
+  }
+
+  fn write_file(path: &Path, contents: &str) {
+    fs::write(path, contents).unwrap();
+  }
+
   fn assert_within_tol(expected: f32, actual: f32, tol: f32) {
     assert!(
       (expected - actual).abs() < tol,
@@ -196,5 +241,81 @@ mod tests {
     let expected = 0.235004;
     let actual = sigmoid_derivitive(x);
     assert_within_tol(expected, actual, 1e-6);
+  }
+
+  #[test]
+  fn load_model_config_parses_expected_json_shape() {
+    let temp_dir = TempDir::new("model_config_parse");
+    let config_path = temp_dir.join("model_config.json");
+    write_file(
+      &config_path,
+      r#"{
+  "layer_sizes": [4, 10],
+  "alpha": 0.01,
+  "gamma": 0.05,
+  "convergence_threshold": 0.0,
+  "convergence_steps": 2,
+  "activation_function": "Tanh"
+}"#
+    );
+
+    let actual = load_model_config(config_path.to_str().unwrap());
+    let expected = PredictiveCodingModelConfig {
+      layer_sizes: vec![4, 10],
+      alpha: 0.01,
+      gamma: 0.05,
+      convergence_threshold: 0.0,
+      convergence_steps: 2,
+      activation_function: ActivationFunction::Tanh,
+    };
+
+    assert_eq!(actual, expected);
+  }
+
+  #[test]
+  fn load_model_config_rejects_missing_required_fields() {
+    let temp_dir = TempDir::new("model_config_missing_field");
+    let config_path = temp_dir.join("model_config.json");
+    write_file(
+      &config_path,
+      r#"{
+  "layer_sizes": [4, 10],
+  "alpha": 0.01,
+  "gamma": 0.05,
+  "convergence_threshold": 0.0,
+  "convergence_steps": 2
+}"#
+    );
+
+    let result = std::panic::catch_unwind(|| {
+      load_model_config(config_path.to_str().unwrap());
+    });
+
+    assert!(result.is_err());
+  }
+
+  #[test]
+  fn model_snapshot_round_trips_through_disk() {
+    let temp_dir = TempDir::new("snapshot_round_trip");
+    let snapshot_path = temp_dir.join("model_snapshot.json");
+    let mut model = PredictiveCodingModel::new(&PredictiveCodingModelConfig {
+      layer_sizes: vec![4, 10],
+      alpha: 0.01,
+      gamma: 0.05,
+      convergence_threshold: 0.0,
+      convergence_steps: 2,
+      activation_function: ActivationFunction::Relu,
+    });
+
+    model.set_input(array![1.0, 0.0, 0.5, 0.25]);
+    model.set_output(array![0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+    model.compute_predictions_and_errors();
+
+    save_model_snapshot(&model, snapshot_path.to_str().unwrap());
+    let loaded_model = load_model_snapshot(snapshot_path.to_str().unwrap());
+
+    let original_json = serde_json::to_value(&model).unwrap();
+    let loaded_json = serde_json::to_value(&loaded_model).unwrap();
+    assert_eq!(loaded_json, original_json);
   }
 }
