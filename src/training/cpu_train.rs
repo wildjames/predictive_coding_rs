@@ -2,6 +2,7 @@
 
 use crate::{
   data_handling::data_handler,
+  error::Result,
   model_structure::{
     model::PredictiveCodingModel,
     model_utils::set_rand_input_and_output
@@ -54,22 +55,26 @@ impl TrainingHandler for SingleThreadTrainHandler {
     &self.file_output_prefix
   }
 
-  fn pre_training_hook(&mut self) {
+  fn pre_training_hook(&mut self) -> Result<()> {
     info!("Starting training with single-threaded strategy");
+    Ok(())
   }
 
-  fn train_step(&mut self, _step: u32) {
-  set_rand_input_and_output(&mut self.model, &self.data);
-  self.model.reinitialise_latents();
+  fn train_step(&mut self, _step: u32) -> Result<()> {
+    set_rand_input_and_output(&mut self.model, &self.data);
+    self.model.reinitialise_latents();
 
-  // Train on this example until convergence.
-  self.model.converge_values();
-  self.model.update_weights();
+    // Train on this example until convergence.
+    self.model.converge_values();
+    self.model.update_weights();
+
+    Ok(())
   }
 
-  fn report_hook(&mut self, step: u32) {
+  fn report_hook(&mut self, step: u32) -> Result<()> {
     let energy: f32 = self.model.read_total_energy();
     info!("Step {}: Current model state: energy = {:.2}", step, energy);
+    Ok(())
   }
 }
 
@@ -116,16 +121,17 @@ impl TrainingHandler for BatchTrainHandler {
   }
 
   /// Report the training parameters and model config. Also save setup to file for future reference
-  fn pre_training_hook(&mut self) {
+  fn pre_training_hook(&mut self) -> Result<()> {
     info!("Starting training with mini-batch strategy");
     info!(
       "Mini batch params: batch size = {}",
       self.batch_size
     );
+    Ok(())
   }
 
   /// Train batch_size models in parallel on different data, then compute the average weight update across them and apply it to the model.
-  fn train_step(&mut self, _step: u32) {
+  fn train_step(&mut self, _step: u32) -> Result<()> {
     // I'll iterate over this with Rayon to parallelise the batch
     let batch_indexes: Vec<u32> = (0..self.batch_size).collect();
 
@@ -168,10 +174,12 @@ impl TrainingHandler for BatchTrainHandler {
 
     // Apply the average weight changes to the model.
     self.model.apply_weight_updates(avg_batch_weight_changes);
+
+    Ok(())
   }
 
 
-  fn report_hook(&mut self, step: u32) {
+  fn report_hook(&mut self, step: u32) -> Result<()> {
     // The mini batch model is cloned for each batch element, so the main model never gets inference run on it
     // So, do that in the reporting step to get a sense of how the model is doing on the data.
     self.model.reinitialise_latents();
@@ -180,6 +188,7 @@ impl TrainingHandler for BatchTrainHandler {
 
     let energy: f32 = self.model.read_total_energy();
     info!("Step {}: Current model state: energy = {:.2}", step, energy);
+    Ok(())
   }
 }
 
@@ -262,8 +271,8 @@ mod tests {
       4,
     );
 
-    single_handler.train_step(0);
-    batch_handler.train_step(0);
+    single_handler.train_step(0).unwrap();
+    batch_handler.train_step(0).unwrap();
 
     let single_weights = &single_handler.get_model().get_layer(1).weights;
     let batch_weights = &batch_handler.get_model().get_layer(1).weights;

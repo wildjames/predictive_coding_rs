@@ -1,11 +1,18 @@
 use crate::{
   data_handling::data_handler::TrainingDataset,
+  error::{PredictiveCodingError, Result},
   model_structure::model::PredictiveCodingModel,
   training::{
     cpu_train,
     train_handler::TrainingHandler,
     utils::{
-      TrainConfig, TrainingStrategy, load_dataset, load_model, load_training_config, validate_model_and_dataset_shapes
+      TrainConfig,
+      TrainingStrategy,
+      load_dataset,
+      load_model,
+      load_training_config,
+      validate_model_and_dataset_shapes,
+      validate_training_config,
     }
   }
 };
@@ -14,24 +21,23 @@ use tracing::{info};
 
 
 fn get_handler(
-  training_config: &TrainConfig,
-  data: &TrainingDataset,
-  file_output_prefix: &str
+  training_config: TrainConfig,
+  model: PredictiveCodingModel,
+  data: TrainingDataset,
+  file_output_prefix: String
 ) -> Box<dyn TrainingHandler> {
-  let model: PredictiveCodingModel = load_model(&training_config.model_source);
-
-  match training_config.training_strategy {
+  match training_config.training_strategy.clone() {
     TrainingStrategy::SingleThread => Box::new(cpu_train::SingleThreadTrainHandler::new(
-      training_config.clone(),
+      training_config,
       model,
-      data.clone(),
-      file_output_prefix.to_string()
+      data,
+      file_output_prefix
     )),
     TrainingStrategy::MiniBatch { batch_size } => Box::new(cpu_train::BatchTrainHandler::new(
-      training_config.clone(),
+      training_config,
       model,
-      data.clone(),
-      file_output_prefix.to_string(),
+      data,
+      file_output_prefix,
       batch_size,
     ))
   }
@@ -42,37 +48,36 @@ fn get_handler(
 pub fn setup_training_run_handler(
   config: String,
   output_prefix: String
-) -> Box<dyn TrainingHandler> {
+) -> Result<Box<dyn TrainingHandler>> {
 
-  let training_config: TrainConfig = load_training_config(&config);
+  let training_config: TrainConfig = load_training_config(&config)?;
+  validate_training_config(&training_config)?;
 
-  let data: TrainingDataset = load_dataset(&training_config.dataset);
+  let data: TrainingDataset = load_dataset(&training_config.dataset)?;
   info!(
     "Loaded the dataset. I have {} samples",
     data.dataset_size
   );
 
   // Build the model
-  let model: PredictiveCodingModel = load_model(&training_config.model_source);
+  let model: PredictiveCodingModel = load_model(&training_config.model_source)?;
   info!(
     "Created the model with layer sizes {:?}",
     model.get_layer_sizes()
   );
 
-  if let Err(message) = validate_model_and_dataset_shapes(&model, &data) {
-    panic!("{}", message);
-  }
+  validate_model_and_dataset_shapes(&model, &data)?;
 
   // Make sure that the output directory exists
-  let output_dir = std::path::Path::new(&output_prefix).parent().unwrap();
-  info!("Saving training artifacts to {}", output_dir.display());
-  std::fs::create_dir_all(output_dir).expect("Failed to create output directory for training artifacts");
+  if let Some(output_dir) = std::path::Path::new(&output_prefix)
+    .parent()
+    .filter(|path| !path.as_os_str().is_empty()) {
+      info!("Saving training artifacts to {}", output_dir.display());
+      std::fs::create_dir_all(output_dir)
+        .map_err(|source| PredictiveCodingError::io("create training artifact directory", output_dir, source))?;
+    }
 
   // The handler orchestrated the training process by providing hook functions to the training loop.
   // Choose the correct one for this config.
-  get_handler(
-    &training_config,
-    &data,
-    &output_prefix
-  )
+  Ok(get_handler(training_config, model, data, output_prefix))
 }

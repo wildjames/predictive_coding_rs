@@ -2,6 +2,7 @@
 
 use crate::{
   data_handling::data_handler::TrainingDataset,
+  error::{PredictiveCodingError, Result},
   model_structure::model::{
     PredictiveCodingModel,
     PredictiveCodingModelConfig
@@ -32,47 +33,64 @@ pub fn set_rand_input_and_output(
 
   model.set_input(input_values);
   model.set_output(output_values);
-
 }
 
-pub fn load_model_config(fname: &str) -> PredictiveCodingModelConfig {
-  serde_json::from_reader(
-    std::fs::File::open(fname).unwrap()
-  ).unwrap()
+fn ensure_parent_dir(filename: &str) -> Result<()> {
+  if let Some(parent) = Path::new(filename).parent() && !parent.as_os_str().is_empty() {
+      std::fs::create_dir_all(parent)
+        .map_err(|source| PredictiveCodingError::io("create directory", parent, source))?;
+    }
+
+  Ok(())
 }
 
-pub fn create_from_config(fname: &str) -> PredictiveCodingModel {
-  let config = load_model_config(fname);
-  PredictiveCodingModel::new(&config)
+pub fn load_model_config(fname: &str) -> Result<PredictiveCodingModelConfig> {
+  let file = std::fs::File::open(fname)
+    .map_err(|source| PredictiveCodingError::io("open model config", fname, source))?;
+
+  serde_json::from_reader(file)
+    .map_err(|source| PredictiveCodingError::json_deserialize(fname, source))
+}
+
+pub fn create_from_config(fname: &str) -> Result<PredictiveCodingModel> {
+  let config = load_model_config(fname)?;
+  Ok(PredictiveCodingModel::new(&config))
 }
 
 pub fn save_model_config(
   config: &PredictiveCodingModelConfig,
   filename: &str
-) {
-  if let Some(parent) = Path::new(filename).parent()
-    && !parent.as_os_str().is_empty() {
-      std::fs::create_dir_all(parent).unwrap();
-    }
-  let config_ser = serde_json::to_string(config).unwrap();
-  std::fs::write(filename, config_ser).unwrap();
+) -> Result<()> {
+  ensure_parent_dir(filename)?;
+
+  let config_ser = serde_json::to_string(config)
+    .map_err(|source| PredictiveCodingError::json_serialize(filename, source))?;
+  std::fs::write(filename, config_ser)
+    .map_err(|source| PredictiveCodingError::io("write model config", filename, source))?;
+
+  Ok(())
 }
 
 pub fn save_model_snapshot(
   model: &PredictiveCodingModel,
   filename: &str
-) {
-  if let Some(parent) = Path::new(filename).parent()
-    && !parent.as_os_str().is_empty() {
-      std::fs::create_dir_all(parent).unwrap();
-    }
-  let model_ser = serde_json::to_string(&model).unwrap();
-  std::fs::write(filename, model_ser).unwrap();
+) -> Result<()> {
+  ensure_parent_dir(filename)?;
+
+  let model_ser = serde_json::to_string(&model)
+    .map_err(|source| PredictiveCodingError::json_serialize(filename, source))?;
+  std::fs::write(filename, model_ser)
+    .map_err(|source| PredictiveCodingError::io("write model snapshot", filename, source))?;
+
+  Ok(())
 }
 
-pub fn load_model_snapshot(filename: &str) -> PredictiveCodingModel {
-  let model_ser = std::fs::read_to_string(filename).unwrap();
-  serde_json::from_str(&model_ser).unwrap()
+pub fn load_model_snapshot(filename: &str) -> Result<PredictiveCodingModel> {
+  let model_ser = std::fs::read_to_string(filename)
+    .map_err(|source| PredictiveCodingError::io("read model snapshot", filename, source))?;
+
+  serde_json::from_str(&model_ser)
+    .map_err(|source| PredictiveCodingError::json_deserialize(filename, source))
 }
 
 /// Activation function identifiers for serialization-friendly models.
@@ -259,7 +277,7 @@ mod tests {
 }"#
     );
 
-    let actual = load_model_config(config_path.to_str().unwrap());
+    let actual = load_model_config(config_path.to_str().unwrap()).unwrap();
     let expected = PredictiveCodingModelConfig {
       layer_sizes: vec![4, 10],
       alpha: 0.01,
@@ -287,11 +305,19 @@ mod tests {
 }"#
     );
 
-    let result = std::panic::catch_unwind(|| {
-      load_model_config(config_path.to_str().unwrap());
-    });
+    let result = load_model_config(config_path.to_str().unwrap());
 
     assert!(result.is_err());
+  }
+
+  #[test]
+  fn load_model_config_error_includes_path() {
+    let temp_dir = TempDir::new("missing_model_config");
+    let config_path = temp_dir.join("missing_model_config.json");
+
+    let error = load_model_config(config_path.to_str().unwrap()).unwrap_err();
+
+    assert!(error.to_string().contains(&config_path.display().to_string()));
   }
 
   #[test]
@@ -311,8 +337,8 @@ mod tests {
     model.set_output(array![0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
     model.compute_predictions_and_errors();
 
-    save_model_snapshot(&model, snapshot_path.to_str().unwrap());
-    let loaded_model = load_model_snapshot(snapshot_path.to_str().unwrap());
+    save_model_snapshot(&model, snapshot_path.to_str().unwrap()).unwrap();
+    let loaded_model = load_model_snapshot(snapshot_path.to_str().unwrap()).unwrap();
 
     let original_json = serde_json::to_value(&model).unwrap();
     let loaded_json = serde_json::to_value(&loaded_model).unwrap();

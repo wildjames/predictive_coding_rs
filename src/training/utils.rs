@@ -3,6 +3,7 @@ use crate::{
     data_handler::TrainingDataset,
     mnist::load_mnist
   },
+  error::{PredictiveCodingError, Result},
   model_structure::{
     model::PredictiveCodingModel,
     model_utils::{
@@ -26,7 +27,7 @@ pub enum ModelSource {
   Snapshot(String)
 }
 
-pub fn load_model(model_source: &ModelSource) -> PredictiveCodingModel {
+pub fn load_model(model_source: &ModelSource) -> Result<PredictiveCodingModel> {
   match model_source {
     ModelSource::Config(config) => create_from_config(config),
     ModelSource::Snapshot(path) => load_model_snapshot(path)
@@ -38,9 +39,12 @@ pub enum DataSetSource {
   MNIST { input_idx_file: String, output_idx_file: String }
 }
 
-pub fn load_dataset(dataset_source: &DataSetSource) -> TrainingDataset {
+pub fn load_dataset(dataset_source: &DataSetSource) -> Result<TrainingDataset> {
   match dataset_source {
-    DataSetSource::MNIST { input_idx_file, output_idx_file } => load_mnist(input_idx_file, output_idx_file).unwrap()
+    DataSetSource::MNIST {
+      input_idx_file,
+      output_idx_file,
+    } => load_mnist(input_idx_file, output_idx_file),
   }
 }
 
@@ -67,54 +71,65 @@ pub struct TrainConfig {
 pub fn validate_model_and_dataset_shapes(
   model: &PredictiveCodingModel,
   data: &TrainingDataset
-) -> Result<(), String> {
+) -> Result<()> {
+  if data.dataset_size == 0 {
+    return Err(PredictiveCodingError::validation("Dataset is empty"));
+  }
+
   let layer_sizes: Vec<usize> = model.get_layer_sizes();
   let Some(model_input_size) = layer_sizes.first().copied() else {
-    return Err(String::from("Model has no layers"));
+    return Err(PredictiveCodingError::validation("Model has no layers"));
   };
   let Some(model_output_size) = layer_sizes.last().copied() else {
-    return Err(String::from("Model has no layers"));
+    return Err(PredictiveCodingError::validation("Model has no layers"));
   };
 
   if data.inputs.shape()[1] != model_input_size {
-    return Err(format!(
+    return Err(PredictiveCodingError::validation(format!(
       "Model input size {} does not match dataset input size {}",
       model_input_size,
       data.inputs.shape()[1]
-    ));
+    )));
   }
 
   if data.labels.shape()[1] != model_output_size {
-    return Err(format!(
+    return Err(PredictiveCodingError::validation(format!(
       "Model output size {} does not match dataset output size {}",
       model_output_size,
       data.labels.shape()[1]
-    ));
+    )));
   }
 
   Ok(())
 }
 
-pub fn load_training_config(config_path: &str) -> TrainConfig {
-  let config_str = std::fs::read_to_string(config_path).expect(
-    "Failed to read training config file. Please ensure the file exists and is readable."
-  );
-  let training_config: TrainConfig = serde_json::from_str(&config_str).expect(
-    "Failed to parse training config file. Please ensure it is a valid JSON file with the correct fields."
-  );
-
-  training_config
+pub fn validate_training_config(training_config: &TrainConfig) -> Result<()> {
+  match training_config.training_strategy {
+    TrainingStrategy::SingleThread => Ok(()),
+    TrainingStrategy::MiniBatch { batch_size } if batch_size > 0 => Ok(()),
+    TrainingStrategy::MiniBatch { .. } => Err(PredictiveCodingError::validation(
+      "Mini-batch training requires batch_size > 0"
+    )),
+  }
 }
 
-pub fn save_training_config(config: &TrainConfig, output_path: &str) {
-  serde_json::to_writer_pretty(
-    std::fs::File::create(output_path).expect(
-      "Failed to create training config output file. Please ensure the path is correct and writable."
-    ),
-    config
-  ).expect(
-    "Failed to write training config to file. Please ensure the output path is correct and writable."
-  );
+pub fn load_training_config(config_path: &str) -> Result<TrainConfig> {
+  let config_str = std::fs::read_to_string(config_path)
+    .map_err(|source| PredictiveCodingError::io("read training config", config_path, source))?;
+  let training_config: TrainConfig = serde_json::from_str(&config_str)
+    .map_err(|source| PredictiveCodingError::json_deserialize(config_path, source))?;
+
+  Ok(training_config)
+}
+
+pub fn save_training_config(config: &TrainConfig, output_path: &str) -> Result<()> {
+  let file = std::fs::File::create(output_path)
+    .map_err(|source| PredictiveCodingError::io("create training config", output_path, source))?;
+
+  serde_json::to_writer_pretty(file, config)
+    .map_err(|source| PredictiveCodingError::json_serialize(output_path, source))?;
+
+  Ok(())
 }
 
 #[cfg(test)]
@@ -210,7 +225,7 @@ mod tests {
 }"#
     );
 
-    let actual: TrainConfig = load_training_config(config_path.to_str().unwrap());
+    let actual: TrainConfig = load_training_config(config_path.to_str().unwrap()).unwrap();
     let expected: TrainConfig = TrainConfig {
       model_source: ModelSource::Snapshot(String::from("test_data/model_snapshot_tiny.json")),
       dataset: DataSetSource::MNIST {
@@ -248,12 +263,20 @@ mod tests {
 }"#
     );
 
-    // This should panic, becuase the report_interval field is missing
-    let result = std::panic::catch_unwind(|| {
-      load_training_config(config_path.to_str().unwrap());
-    });
+    // This should fail because the report_interval field is missing.
+    let result = load_training_config(config_path.to_str().unwrap());
 
     assert!(result.is_err());
+  }
+
+  #[test]
+  fn load_training_config_error_includes_path() {
+    let temp_dir = TempDir::new("training_config_missing_file");
+    let config_path = temp_dir.join("missing_training_config.json");
+
+    let error = load_training_config(config_path.to_str().unwrap()).unwrap_err();
+
+    assert!(error.to_string().contains(&config_path.display().to_string()));
   }
 
   #[test]
@@ -263,12 +286,12 @@ mod tests {
 
     let result = validate_model_and_dataset_shapes(&model, &dataset);
 
-    assert_eq!(
-      result,
-      Err(String::from(
-        "Model input size 4 does not match dataset input size 3"
-      ))
-    );
+    match result {
+      Err(PredictiveCodingError::Validation { message }) => {
+        assert_eq!(message, "Model input size 4 does not match dataset input size 3");
+      }
+      other => panic!("expected validation error, got {other:?}"),
+    }
   }
 
   #[test]
@@ -278,11 +301,35 @@ mod tests {
 
     let result = validate_model_and_dataset_shapes(&model, &dataset);
 
-    assert_eq!(
-      result,
-      Err(String::from(
-        "Model output size 10 does not match dataset output size 9"
-      ))
-    );
+    match result {
+      Err(PredictiveCodingError::Validation { message }) => {
+        assert_eq!(message, "Model output size 10 does not match dataset output size 9");
+      }
+      other => panic!("expected validation error, got {other:?}"),
+    }
+  }
+
+  #[test]
+  fn validate_training_config_rejects_zero_batch_size() {
+    let config = TrainConfig {
+      model_source: ModelSource::Config(String::from("unused.json")),
+      dataset: DataSetSource::MNIST {
+        input_idx_file: String::from("unused-images.idx"),
+        output_idx_file: String::from("unused-labels.idx"),
+      },
+      training_strategy: TrainingStrategy::MiniBatch { batch_size: 0 },
+      training_steps: 1,
+      report_interval: 0,
+      snapshot_interval: 0,
+    };
+
+    let result = validate_training_config(&config);
+
+    match result {
+      Err(PredictiveCodingError::Validation { message }) => {
+        assert_eq!(message, "Mini-batch training requires batch_size > 0");
+      }
+      other => panic!("expected validation error, got {other:?}"),
+    }
   }
 }
