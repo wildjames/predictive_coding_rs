@@ -59,7 +59,7 @@ pub fn run_supervised_training_loop(handler: &mut dyn TrainingHandler) {
       handler.report_hook(step);
     }
 
-    if snapshot_interval > 0 && (step % snapshot_interval == 0) {
+    if (snapshot_interval > 0) && (step % snapshot_interval == 0) {
       let oname: String = format!("{}_snapshot_step_{}.json", handler.get_file_output_prefix(), step);
       info!("Saving model snapshot {}", oname);
 

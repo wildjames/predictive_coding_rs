@@ -1,8 +1,14 @@
-use crate::model_structure::{
-  model::PredictiveCodingModel,
-  model_utils::{
-    create_from_config,
-    load_model_snapshot
+use crate::{
+  data_handling::{
+    data_handler::TrainingDataset,
+    mnist::load_mnist
+  },
+  model_structure::{
+    model::PredictiveCodingModel,
+    model_utils::{
+      create_from_config,
+      load_model_snapshot
+    }
   }
 };
 
@@ -28,18 +34,32 @@ pub fn load_model(model_source: &ModelSource) -> PredictiveCodingModel {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
+pub enum DataSetSource {
+  MNIST { input_idx_file: String, output_idx_file: String }
+}
+
+pub fn load_dataset(dataset_source: &DataSetSource) -> TrainingDataset {
+  match dataset_source {
+    DataSetSource::MNIST { input_idx_file, output_idx_file } => load_mnist(input_idx_file, output_idx_file).unwrap()
+  }
+}
+
+#[derive(Serialize, Deserialize, Clone)]
 pub struct TrainConfig {
   /// Path to model config file or snapshot
   pub model_source: ModelSource,
+
+  /// The dataset to train on
+  pub dataset: DataSetSource,
 
   /// What training strategy to use
   pub training_strategy: TrainingStrategy,
 
   /// Training steps
   pub training_steps: u32,
-  /// Report interval (default to 1_000)
+  /// Report interval
   pub report_interval: u32,
-  /// Snapshot interval (default to 10_000)
+  /// Snapshot interval
   pub snapshot_interval: u32,
 }
 

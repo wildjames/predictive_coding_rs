@@ -3,7 +3,6 @@
 use predictive_coding::{
   data_handling::{
     data_handler::TrainingDataset,
-    mnist::load_mnist
   },
   model_structure::model::PredictiveCodingModel,
   training::{
@@ -15,6 +14,7 @@ use predictive_coding::{
     utils::{
       TrainConfig,
       TrainingStrategy,
+      load_dataset,
       load_model,
       load_training_config
     }
@@ -41,12 +41,9 @@ fn main() {
   let args: TrainArgs = TrainArgs::parse();
   let training_config: TrainConfig = load_training_config(&args.config);
 
-  let data: TrainingDataset = load_mnist(
-      "data/mnist/train-images-idx3-ubyte",
-      "data/mnist/train-labels-idx1-ubyte")
-    .unwrap();
+  let data: TrainingDataset = load_dataset(&training_config.dataset);
   info!(
-    "Loaded the MNIST dataset. I have {} images",
+    "Loaded the dataset. I have {} samples",
     data.dataset_size
   );
 
@@ -57,11 +54,25 @@ fn main() {
     model.get_layer_sizes()
   );
 
+  // Check that the data and model are compatible
+  let layer_sizes = model.get_layer_sizes();
+  let model_input_size = layer_sizes.first().unwrap();
+  let model_output_size = layer_sizes.last().unwrap();
+  if data.inputs.shape()[1] != *model_input_size {
+    panic!("Model input size {} does not match dataset input size {}", model_input_size, data.inputs.shape()[1]);
+  }
+  if data.labels.shape()[1] != *model_output_size {
+    panic!("Model output size {} does not match dataset output size {}", model_output_size, data.labels.shape()[1]);
+  }
+
+  // Where to put stuff
   let file_output_prefix: String = format!(
     "data/model_{}/model",
     chrono::Utc::now().timestamp()
   );
 
+  // The handler orchestrated the training process by providing hook functions to the training loop.
+  // Choose the correct one for this config.
   let mut handler: Box<dyn TrainingHandler> = match training_config.training_strategy {
     TrainingStrategy::SingleThread => Box::new(cpu_train::SingleThreadTrainHandler::new(
       training_config.clone(),

@@ -1,3 +1,5 @@
+//! This program takes a trained modek, and evaluates it against the MNIST test dataset, reporting its accuracy, convergence time, and confidence when correct. It also saves these results to a file in the same directory as the model.
+
 use tracing::{info};
 use ndarray::Array1;
 use std::time::Instant;
