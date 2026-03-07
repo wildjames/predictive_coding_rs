@@ -16,16 +16,17 @@ I have, at the time of writing, got a model architecture that converges on a rou
 - [x] Model evaluation binary (accuracy, average confidence, speed)
 - [x] Multithreading
   - [x] Refactor benchmark to benchmark the multithreaded version of the training too
-- [ ] Make the dataset struct more generic
+- [x] Make the dataset struct more generic
+- [ ] Work down the architecture refactoring suggested by chatGPT 5.4 [TODO.md](./TODO.md)
 - [x] Flesh out train binary
   - [x] allow user to resume from stored model
 	- [x] store the model hyperparameters in a json file in the output directory
 	- [x] allow hyperparameters to be set by the user (pass in JSON)
-- [ ] Document how models are configured
+- [x] Document how models are configured
 - [ ] Gain confidence in my implementation
 	- [x] Figure out the model params for a mnist classifier
-	- [ ] unit tests?
-	- [ ] integration tests
+	- [x] unit tests?
+	- [x] integration tests
 - [ ] more advanced training strategies
   - [x] mini-batch sampling (optimise B samples in parallel, then for weight updates compute the mean $\Delta\bf{W}$ for the batches. 5.2. of 2506.06332)
 	- [ ] GPU training
