@@ -1,13 +1,20 @@
 //! Training orchestration for predictive coding models.
 
 use crate::{
-  data_handling::data_handler, model_structure::{model::{
-    PredictiveCodingModel,
-    PredictiveCodingModelConfig
-  }, model_utils::save_model_config}, training::{
+  data_handling::data_handler,
+  model_structure::{
+    model::{
+      PredictiveCodingModel,
+      PredictiveCodingModelConfig
+    },
+    model_utils::save_model_config
+  },
+  training::{
     train_handler::TrainingHandler,
     utils::{
-      TrainConfig, save_training_config, set_rand_input_and_output
+      TrainConfig,
+      save_training_config,
+      set_rand_input_and_output
     },
   }
 };
@@ -20,17 +27,17 @@ use tracing::info;
 pub struct SingleThreadTrainHandler {
   config: TrainConfig,
   model: PredictiveCodingModel,
-  data: data_handler::ImagesBWDataset,
+  data: data_handler::TrainingDataset,
   file_output_prefix: String
 }
 
-impl TrainingHandler for SingleThreadTrainHandler {
-  fn new(
+impl SingleThreadTrainHandler {
+  pub fn new(
     config: TrainConfig,
     model: PredictiveCodingModel,
-    data: data_handler::ImagesBWDataset,
+    data: data_handler::TrainingDataset,
     file_output_prefix: String
-  ) -> SingleThreadTrainHandler {
+  ) -> Self {
     SingleThreadTrainHandler {
       config,
       model,
@@ -38,22 +45,20 @@ impl TrainingHandler for SingleThreadTrainHandler {
       file_output_prefix
     }
   }
+}
 
+impl TrainingHandler for SingleThreadTrainHandler {
   fn get_config(&self) -> &TrainConfig {
     &self.config
   }
   fn get_model(&mut self) -> &mut PredictiveCodingModel {
     &mut self.model
   }
-  fn get_data(&self) -> &data_handler::ImagesBWDataset {
+  fn get_data(&self) -> &data_handler::TrainingDataset {
     &self.data
   }
   fn get_file_output_prefix(&self) -> &String {
     &self.file_output_prefix
-  }
-
-  fn pre_step_hook(&mut self, _step: u32) {
-    // No pre-step hook for single-threaded training
   }
 
   fn pre_training_hook(&mut self) {
@@ -87,17 +92,13 @@ impl TrainingHandler for SingleThreadTrainHandler {
     );
   }
 
-  fn train(&mut self) {
+  fn train_step(&mut self, _step: u32) {
   set_rand_input_and_output(&mut self.model, &self.data);
   self.model.reinitialise_latents();
 
   // Train on this example until convergence.
   self.model.converge_values();
   self.model.update_weights();
-  }
-
-  fn post_step_hook(&mut self, _step: u32) {
-    // No post-step hook for single-threaded training
   }
 
   fn report_hook(&mut self, step: u32) {
@@ -110,24 +111,30 @@ impl TrainingHandler for SingleThreadTrainHandler {
 pub struct BatchTrainHandler {
   config: TrainConfig,
   model: PredictiveCodingModel,
-  data: data_handler::ImagesBWDataset,
-  file_output_prefix: String
+  data: data_handler::TrainingDataset,
+  file_output_prefix: String,
+  batch_size: u32
 }
 
-impl TrainingHandler for BatchTrainHandler {
-  fn new(
+impl BatchTrainHandler {
+  pub fn new(
     config: TrainConfig,
     model: PredictiveCodingModel,
-    data: data_handler::ImagesBWDataset,
-    file_output_prefix: String
+    data: data_handler::TrainingDataset,
+    file_output_prefix: String,
+    batch_size: u32
   ) -> Self {
     BatchTrainHandler {
       config,
       model,
       data,
-      file_output_prefix
+      file_output_prefix,
+      batch_size
     }
   }
+}
+
+impl TrainingHandler for BatchTrainHandler {
 
   fn get_config(&self) -> &TrainConfig {
     &self.config
@@ -135,23 +142,20 @@ impl TrainingHandler for BatchTrainHandler {
   fn get_model(&mut self) -> &mut PredictiveCodingModel {
     &mut self.model
   }
-  fn get_data(&self) -> &data_handler::ImagesBWDataset {
+  fn get_data(&self) -> &data_handler::TrainingDataset {
     &self.data
   }
   fn get_file_output_prefix(&self) -> &String {
     &self.file_output_prefix
   }
 
-  fn pre_step_hook(&mut self, _step: u32) {
-    // No pre-step hook for mini-batch training
-  }
-
+  /// Report the training parameters and model config. Also save setup to file for future reference
   fn pre_training_hook(&mut self) {
     info!("Starting training with mini-batch strategy");
     info!(
       "Training parameters:\n\ttraining steps: {}\n\tbatch size: {}\n\treporting interval: {}\n\tsnapshot interval: {}",
       self.config.training_steps,
-      self.config.batch_size.expect("Batch size must be set for mini-batch training"),
+      self.batch_size,
       self.config.report_interval,
       self.config.snapshot_interval
     );
@@ -170,7 +174,7 @@ impl TrainingHandler for BatchTrainHandler {
     // Write the config and training params to a file
     save_model_config(
       model_config,
-      &format!("{}_config.json", &self.file_output_prefix)
+      &format!("{}_model_config.json", &self.file_output_prefix)
     );
     save_training_config(
       &self.config,
@@ -178,11 +182,10 @@ impl TrainingHandler for BatchTrainHandler {
     );
   }
 
-  /// Train B models in parallel on different data, then compute the average weight update across them and apply it to the model.
-  fn train(&mut self) {
-    let batch_size: u32 = self.config.batch_size.expect("Batch size must be set for mini-batch training");
+  /// Train batch_size models in parallel on different data, then compute the average weight update across them and apply it to the model.
+  fn train_step(&mut self, _step: u32) {
     // I'll iterate over this with Rayon to parallelise the batch
-    let batch_indexes: Vec<u32> = (0..batch_size).collect();
+    let batch_indexes: Vec<u32> = (0..self.batch_size).collect();
 
     // Each element of the batch trains on a single sample, and we collect their weight changes as a result.
     // The batch weight changes will be a Vec of length batch_size, where each element is a Vec of length
@@ -216,16 +219,11 @@ impl TrainingHandler for BatchTrainHandler {
 
     let avg_batch_weight_changes: Vec<Array2<f32>> = sum_batch_weight_changes
       .into_iter()
-      .map(|sum_weight_change: Array2<f32>| sum_weight_change / batch_size as f32)
+      .map(|sum_weight_change: Array2<f32>| sum_weight_change / self.batch_size as f32)
       .collect();
 
     // Apply the average weight changes to the model.
     self.model.apply_weight_updates(avg_batch_weight_changes);
-  }
-
-
-  fn post_step_hook(&mut self, _step: u32) {
-    // No post-step hook for mini-batch training
   }
 
 

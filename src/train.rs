@@ -2,14 +2,7 @@
 
 use predictive_coding::{
   data_handling::data_handler,
-  model_structure::{
-    model::PredictiveCodingModel,
-    model_utils::{
-      create_from_config,
-      load_model,
-      save_model
-    }
-  },
+  model_structure::model::PredictiveCodingModel,
   training::{
     cpu_train,
     train_handler::{
@@ -19,6 +12,7 @@ use predictive_coding::{
     utils::{
       TrainConfig,
       TrainingStrategy,
+      load_model,
       load_training_config
     }
   },
@@ -29,10 +23,11 @@ use clap::Parser;
 use tracing::info;
 
 
+/// The training program accepts a config file as a command line argument, which specifies the model architecture and training hyperparameters. The program then loads the MNIST dataset, builds the model, and runs the training loop, saving the trained model to disk at regular intervals during training and at the end of training.
 #[derive(Parser)]
 struct TrainArgs {
-  // Path to training config file
-  #[arg(short, long)]
+  /// Path to training config file
+  #[arg()]
   config: String
 }
 
@@ -40,27 +35,24 @@ struct TrainArgs {
 fn main() {
   logging::setup_tracing(false);
 
-  let args = TrainArgs::parse();
+  let args: TrainArgs = TrainArgs::parse();
   let training_config: TrainConfig = load_training_config(&args.config);
 
-  let data: data_handler::ImagesBWDataset = data_handler::load_mnist(
+  let data: data_handler::TrainingDataset = data_handler::load_mnist(
       "data/mnist/train-images-idx3-ubyte",
       "data/mnist/train-labels-idx1-ubyte")
     .unwrap();
   info!(
     "Loaded the MNIST dataset. I have {} images",
-    data.num_images
+    data.dataset_size
   );
 
   // Build the model
-  let model: PredictiveCodingModel = if let Some(config) = &training_config.model_config {
-    create_from_config(config)
-  } else if let Some(snapshot) = &training_config.snapshot {
-    load_model(snapshot)
-  } else {
-    // Cover compiler error
-    panic!("Exactly one of config and snapshot must be provided");
-  };
+  let model: PredictiveCodingModel = load_model(&training_config.model_source);
+  info!(
+    "Created the model with layer sizes {:?}",
+    model.get_layer_sizes()
+  );
 
   let file_output_prefix: String = format!(
     "data/model_{}/model",
@@ -74,23 +66,15 @@ fn main() {
       data,
       file_output_prefix.clone()
     )),
-    TrainingStrategy::MiniBatch => Box::new(cpu_train::BatchTrainHandler::new(
+    TrainingStrategy::MiniBatch { batch_size } => Box::new(cpu_train::BatchTrainHandler::new(
       training_config.clone(),
       model,
       data,
-      file_output_prefix.clone()
+      file_output_prefix.clone(),
+      batch_size,
     ))
   };
 
   // Execute the loop, training the model
-  run_supervised_training_loop(
-    handler.as_mut(),
-    &file_output_prefix
-  );
-
-  info!("Finished training, saving final model");
-  save_model(
-    handler.get_model(),
-    &format!("{}_{}", file_output_prefix, "final.json")
-  );
+  run_supervised_training_loop(handler.as_mut());
 }

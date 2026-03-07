@@ -62,16 +62,16 @@ fn load_idx<P: AsRef<Path>>(path: P) -> io::Result<IdxData> {
 
 /// Black and white, single channel images with labels. e.g. MNIST dataset
 #[derive(Clone)]
-pub struct ImagesBWDataset {
-  pub num_images: usize,
-  pub images: Array2<u8>, // binary pixel data, images are black and white
-  pub labels: Array1<u8>, // Integers from 0 to 9
+pub struct TrainingDataset {
+  pub dataset_size: usize,
+  pub inputs: Array2<u8>,
+  pub labels: Array1<u8>,
   pub image_width: u32,
   pub image_height: u32,
 }
 
 /// Load MNIST images and labels from IDX files.
-pub fn load_mnist<P: AsRef<Path>>(images_path: P, labels_path: P) -> io::Result<ImagesBWDataset> {
+pub fn load_mnist<P: AsRef<Path>>(images_path: P, labels_path: P) -> io::Result<TrainingDataset> {
 
   let images_idx = load_idx(images_path)?;
   let labels_idx = load_idx(labels_path)?;
@@ -103,9 +103,9 @@ pub fn load_mnist<P: AsRef<Path>>(images_path: P, labels_path: P) -> io::Result<
   }
 
   Ok(
-    ImagesBWDataset {
-      num_images,
-      images,
+    TrainingDataset {
+      dataset_size: num_images,
+      inputs: images,
       labels: labels_idx.data,
       image_height: images_idx.dimensions[1],
       image_width: images_idx.dimensions[2],

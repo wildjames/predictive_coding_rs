@@ -185,7 +185,7 @@ pub struct PredictiveCodingModel {
   convergence_steps: u32,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone, PartialEq)]
 pub struct PredictiveCodingModelConfig {
   pub layer_sizes: Vec<usize>,
   pub alpha: f32,
