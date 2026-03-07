@@ -7,21 +7,23 @@ use crate::{
       PredictiveCodingModel,
       PredictiveCodingModelConfig
     },
-    model_utils::save_model_config
+    model_utils::{
+      save_model_config,
+      set_rand_input_and_output
+    }
   },
   training::{
     train_handler::TrainingHandler,
     utils::{
       TrainConfig,
-      save_training_config,
-      set_rand_input_and_output
+      save_training_config
     },
   }
 };
 
 use ndarray::{Array2};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
-use tracing::info;
+use tracing::{info, debug};
 
 
 pub struct SingleThreadTrainHandler {
@@ -192,7 +194,9 @@ impl TrainingHandler for BatchTrainHandler {
     // num_layers, and each element of THAT is an array2 of the weight changes for the relevant layer.
     let batch_weight_changes: Vec<Vec<Array2<f32>>> = batch_indexes
       .into_par_iter()
-      .map(|_| {
+      .map(|b| {
+        debug!("Training batch element on a single example: {}", b);
+
         let mut model_clone: PredictiveCodingModel = self.model.clone();
         set_rand_input_and_output(&mut model_clone, &self.data);
         model_clone.reinitialise_latents();

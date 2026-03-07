@@ -37,6 +37,7 @@ pub trait TrainingHandler {
   fn post_step_hook(&mut self, _step: u32) {}
 }
 
+
 pub fn run_supervised_training_loop(handler: &mut dyn TrainingHandler) {
   handler.pre_training_hook();
 

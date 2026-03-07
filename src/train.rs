@@ -1,7 +1,10 @@
 //! Train a predictive coding model on the MNIST dataset. The model architecture and training hyperparameters are defined in a config file, and the trained model is saved to disk at regular intervals during training. The final trained model is also saved to disk at the end of training. Exactly one of model_config and model_snapshot should be provided.
 
 use predictive_coding::{
-  data_handling::data_handler,
+  data_handling::{
+    data_handler::TrainingDataset,
+    mnist::load_mnist
+  },
   model_structure::model::PredictiveCodingModel,
   training::{
     cpu_train,
@@ -38,7 +41,7 @@ fn main() {
   let args: TrainArgs = TrainArgs::parse();
   let training_config: TrainConfig = load_training_config(&args.config);
 
-  let data: data_handler::TrainingDataset = data_handler::load_mnist(
+  let data: TrainingDataset = load_mnist(
       "data/mnist/train-images-idx3-ubyte",
       "data/mnist/train-labels-idx1-ubyte")
     .unwrap();
