@@ -2,7 +2,7 @@
 
 use ndarray::{Array2};
 
-/// Black and white, single channel images with labels. e.g. MNIST dataset
+/// Dataset used for training a model.
 #[derive(Clone)]
 pub struct TrainingDataset {
   /// The number of samples in the dataset (e.g. 60000 for MNIST)

@@ -1,3 +1,5 @@
+//! This program is used to benchmark the speed of various training configurations and model architectures. It takes a training config file as input, and times its processes, creating a series of files detailing the results.
+
 use std::time::Instant;
 
 use predictive_coding::{
@@ -21,6 +23,8 @@ use predictive_coding::{
 use tracing::info;
 use clap::Parser;
 
+
+/// This program is used to benchmark the speed of various training configurations and model architectures. It takes a training config file as input, and times its processes, creating a series of files detailing the results.
 #[derive(Parser)]
 struct BenchArgs {
   /// The model configuration to benchmark.

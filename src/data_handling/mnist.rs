@@ -1,6 +1,6 @@
 //! Dataset loading and preprocessing utilities.
 
-use tracing::debug;
+use tracing::{debug, info};
 
 use std::fs::File;
 use std::io::{self, Read, BufReader};
@@ -65,6 +65,7 @@ fn load_idx<P: AsRef<Path>>(path: P) -> io::Result<IdxData> {
 
 /// Load MNIST images and labels from IDX files.
 pub fn load_mnist<P: AsRef<Path>>(images_path: P, labels_path: P) -> io::Result<TrainingDataset> {
+  info!("Loading MNIST dataset from {} and {}", images_path.as_ref().display(), labels_path.as_ref().display());
 
   let images_idx = load_idx(images_path)?;
   let labels_idx = load_idx(labels_path)?;
@@ -83,11 +84,15 @@ pub fn load_mnist<P: AsRef<Path>>(images_path: P, labels_path: P) -> io::Result<
   if num_labels != num_images {
     return Err(io::Error::new(io::ErrorKind::InvalidData, "Mismatch between number of images and labels"));
   }
+  debug!("Number of images and labels: {}", num_images);
+  debug!("Image dimensions: {}x{}", images_idx.dimensions[1], images_idx.dimensions[2]);
 
   // Then parse them to appropriate vectors
   let input_size = (images_idx.dimensions[1] * images_idx.dimensions[2]) as usize; // will be read in these chunks
+  debug!("Input size: {}", input_size);
 
   let mut images: Array2<f32> = Array2::zeros((num_images, input_size));
+  debug!("Parsing image data into array...");
   for i in 0..num_images {
     let start = i * input_size;
     let end = start + input_size;
@@ -101,11 +106,13 @@ pub fn load_mnist<P: AsRef<Path>>(images_path: P, labels_path: P) -> io::Result<
 
   // Create label array, one-hot on the label index.
   let mut labels: Array2<f32> = Array2::zeros((num_labels, 10)); // 10 classes for MNIST
+  debug!("Parsing label data into array...");
   for i in 0..num_labels {
     let label_value = labels_idx.data[i] as usize;
     labels[[i, label_value]] = 1.0;
   }
 
+  debug!("Finished parsing MNIST dataset.");
   Ok(
     TrainingDataset {
       dataset_size: num_images,
