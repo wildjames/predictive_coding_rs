@@ -31,6 +31,10 @@ use predictive_coding::{
 use tracing::info;
 use clap::Parser;
 
+#[cfg(test)]
+#[path = "test_utils.rs"]
+mod test_utils;
+
 
 /// This program is used to benchmark the speed of various training configurations and model architectures. It takes a training config file as input, and times its processes, creating a series of files detailing the results.
 #[derive(Parser)]
@@ -194,150 +198,16 @@ fn run_benchmark_training_loop(
 #[cfg(test)]
 mod tests {
   use super::*;
-
-  use ndarray::{Array1, Array2, array};
-  use predictive_coding::{
-    data_handling::data_handler,
-    model_structure::maths::ActivationFunction,
-    training::configuration::{
-      DataSetSource,
-      ModelSource,
-      TrainingStrategy,
-    },
+  use super::test_utils::{
+    RecordingTrainingHandler,
+    TempDir,
+    single_thread_train_config,
   };
+
   use std::{
     fs,
     path::PathBuf,
-    sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
   };
-
-  struct TempDir {
-    path: PathBuf,
-  }
-
-  impl TempDir {
-    fn new(prefix: &str) -> Self {
-      let unique_id = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-      let path = std::env::temp_dir().join(format!(
-        "predictive_coding_{prefix}_{}_{}",
-        std::process::id(),
-        unique_id
-      ));
-      fs::create_dir_all(&path).unwrap();
-      TempDir { path }
-    }
-
-    fn join(&self, filename: &str) -> PathBuf {
-      self.path.join(filename)
-    }
-  }
-
-  impl Drop for TempDir {
-    fn drop(&mut self) {
-      let _ = fs::remove_dir_all(&self.path);
-    }
-  }
-
-  struct DummyTrainingDataset {
-    inputs: Array2<f32>,
-    labels: Array2<f32>,
-  }
-
-  impl data_handler::TrainingDataset for DummyTrainingDataset {
-    fn get_dataset_size(&self) -> usize {self.inputs.nrows()}
-    fn get_input_size(&self) -> usize {self.inputs.ncols()}
-    fn get_output_size(&self) -> usize {self.labels.ncols()}
-    fn get_inputs(&self) -> &Array2<f32> {&self.inputs}
-    fn get_labels(&self) -> &Array2<f32> {&self.labels}
-
-    fn get_random_input(&self) -> Array1<f32> {
-      self.get_input(0)
-    }
-
-    fn get_random_input_and_output(&self) -> (Array1<f32>, Array1<f32>) {
-      (self.get_input(0), self.get_output(0))
-    }
-
-    fn get_input(&self, _index: usize) -> Array1<f32> {
-      self.inputs.row(0).to_owned()
-    }
-
-    fn get_output(&self, _index: usize) -> Array1<f32> {
-      self.labels.row(0).to_owned()
-    }
-  }
-
-  struct RecordingHandler {
-    config: TrainConfig,
-    model: predictive_coding::model_structure::model::PredictiveCodingModel,
-    data: Arc<dyn data_handler::TrainingDataset>,
-    file_output_prefix: String,
-    steps: Vec<u32>,
-  }
-
-  impl RecordingHandler {
-    fn new(output_prefix: String) -> Self {
-      let model = predictive_coding::model_structure::model::PredictiveCodingModel::new(
-        &PredictiveCodingModelConfig {
-          layer_sizes: vec![4, 10],
-          alpha: 0.01,
-          gamma: 0.05,
-          convergence_threshold: 0.0,
-          convergence_steps: 1,
-          activation_function: ActivationFunction::Relu,
-        },
-      );
-      let data: Arc<dyn data_handler::TrainingDataset> = Arc::new(DummyTrainingDataset {
-        inputs: array![[1.0, 0.0, 0.5, 0.25]],
-        labels: array![[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]],
-      });
-
-      RecordingHandler {
-        config: TrainConfig {
-          model_source: ModelSource::Config(String::from("unused.json")),
-          dataset: DataSetSource::MNIST {
-            input_idx_file: String::from("unused-images.idx"),
-            output_idx_file: String::from("unused-labels.idx"),
-          },
-          training_strategy: TrainingStrategy::SingleThread,
-          training_steps: 2,
-          report_interval: 0,
-          snapshot_interval: 0,
-        },
-        model,
-        data,
-        file_output_prefix: output_prefix,
-        steps: Vec::new(),
-      }
-    }
-  }
-
-  impl TrainingHandler for RecordingHandler {
-    fn get_config(&self) -> &TrainConfig {
-      &self.config
-    }
-
-    fn get_model(&mut self) -> &mut predictive_coding::model_structure::model::PredictiveCodingModel {
-      &mut self.model
-    }
-
-    fn get_data(&self) -> &dyn data_handler::TrainingDataset {
-      self.data.as_ref()
-    }
-
-    fn get_file_output_prefix(&self) -> &String {
-      &self.file_output_prefix
-    }
-
-    fn train_step(&mut self, step: u32) -> Result<()> {
-      self.steps.push(step);
-      Ok(())
-    }
-  }
 
   #[test]
   fn current_git_commit_hash_helper_handles_success_and_failure_cases() {
@@ -359,7 +229,10 @@ mod tests {
     let temp_dir: TempDir = TempDir::new("benchmark_loop");
     let output_prefix: String = temp_dir.join("nested/bench").display().to_string();
     let bench_csv: PathBuf = temp_dir.join("nested/bench_run.csv");
-    let mut handler: RecordingHandler = RecordingHandler::new(output_prefix.clone());
+    let mut handler = RecordingTrainingHandler::new(
+      single_thread_train_config(2, 0, 0),
+      output_prefix.clone(),
+    );
 
     let step_data: Vec<BenchmarkStepData> = run_benchmark_training_loop(&mut handler, bench_csv.to_str().unwrap()).unwrap();
 
@@ -378,8 +251,11 @@ mod tests {
 
   #[test]
   fn recording_handler_exposes_dataset_fixture() {
-    let handler: RecordingHandler = RecordingHandler::new(String::from("unused/bench"));
-    let data: &dyn data_handler::TrainingDataset = handler.get_data();
+    let handler = RecordingTrainingHandler::new(
+      single_thread_train_config(2, 0, 0),
+      String::from("unused/bench"),
+    );
+    let data = handler.get_data();
 
     assert_eq!(data.get_dataset_size(), 1);
     assert_eq!(data.get_input_size(), 4);

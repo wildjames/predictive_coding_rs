@@ -135,45 +135,12 @@ impl TrainingHandler for BatchTrainHandler {
 mod tests {
   use super::*;
 
-  use crate::model_structure::{
-    model::PredictiveCodingModelConfig,
-    maths::ActivationFunction
+  use crate::{
+    test_utils::{DummyTrainingDataset, tiny_relu_model},
   };
   use crate::training::configuration::TrainingStrategy;
   use crate::training::cpu::singlethreaded::SingleThreadTrainHandler;
-  use ndarray::{array, Array1, Array2};
-
-  struct DummyTrainingDataset {
-    dataset_size: usize,
-    input_size: usize,
-    output_size: usize,
-    inputs: Array2<f32>,
-    labels: Array2<f32>,
-  }
-
-  impl data_handler::TrainingDataset for DummyTrainingDataset {
-    fn get_dataset_size(&self) -> usize {self.dataset_size}
-    fn get_input_size(&self) -> usize {self.input_size}
-    fn get_output_size(&self) -> usize {self.output_size}
-    fn get_inputs(&self) -> &Array2<f32> {&self.inputs}
-    fn get_labels(&self) -> &Array2<f32> {&self.labels}
-
-    fn get_random_input(&self) -> Array1<f32> {
-      self.get_input(0)
-    }
-
-    fn get_random_input_and_output(&self) -> (Array1<f32>, Array1<f32>) {
-      (self.get_input(0), self.get_output(0))
-    }
-
-    fn get_input(&self, _index: usize) -> Array1<f32> {
-      self.inputs.row(0).to_owned()
-    }
-
-    fn get_output(&self, _index: usize) -> Array1<f32> {
-      self.labels.row(0).to_owned()
-    }
-  }
+  use ndarray::{array, Array2};
 
   fn dummy_config() -> TrainConfig {
     TrainConfig {
@@ -189,30 +156,14 @@ mod tests {
     }
   }
 
-  fn tiny_model() -> PredictiveCodingModel {
-    PredictiveCodingModel::new(&PredictiveCodingModelConfig {
-      layer_sizes: vec![4, 10],
-      alpha: 0.01,
-      gamma: 0.05,
-      convergence_threshold: 0.0,
-      convergence_steps: 1,
-      activation_function: ActivationFunction::Relu,
-    })
-  }
-
   fn tiny_dataset() -> Arc<dyn data_handler::TrainingDataset> {
     let mut labels: Array2<f32> = Array2::zeros((1, 10));
     labels.row_mut(0).assign(&array![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
 
-    let data: DummyTrainingDataset = DummyTrainingDataset {
-      dataset_size: 1,
-      input_size: 4,
-      output_size: 10,
-      inputs: array![[1.0, 0.0, 0.5, 0.25]],
+    Arc::new(DummyTrainingDataset::from_arrays(
+      array![[1.0, 0.0, 0.5, 0.25]],
       labels,
-    };
-
-    Arc::new(data)
+    ))
   }
 
   fn assert_arrays_close(left: &Array2<f32>, right: &Array2<f32>, tolerance: f32) {
@@ -227,7 +178,7 @@ mod tests {
 
   #[test]
   fn minibatch_aggregation_matches_single_sample_update_on_deterministic_fixture() {
-    let initial_model: PredictiveCodingModel = tiny_model();
+    let initial_model: PredictiveCodingModel = tiny_relu_model();
     let dataset: Arc<dyn data_handler::TrainingDataset> = tiny_dataset();
     let config: TrainConfig = dummy_config();
 
@@ -259,7 +210,7 @@ mod tests {
     let dataset = tiny_dataset();
     let mut handler = BatchTrainHandler::new(
       dummy_config(),
-      tiny_model(),
+      tiny_relu_model(),
       Arc::clone(&dataset),
       String::from("unused/batch"),
       2,

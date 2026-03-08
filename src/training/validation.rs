@@ -65,72 +65,20 @@ pub fn validate_model_and_dataset_shapes(
 mod tests {
   use super::*;
   use crate::{
-    data_handling::data_handler,
+    test_utils::{DummyTrainingDataset, tiny_relu_model},
     training::configuration::{
       DataSetSource,
       ModelSource
     }
   };
-  use ndarray::{Array1, Array2};
-
-  fn tiny_model() -> PredictiveCodingModel {
-    PredictiveCodingModel::new(&crate::model_structure::model::PredictiveCodingModelConfig {
-      layer_sizes: vec![4, 10],
-      alpha: 0.01,
-      gamma: 0.05,
-      convergence_threshold: 0.0,
-      convergence_steps: 1,
-      activation_function: crate::model_structure::maths::ActivationFunction::Relu,
-    })
-  }
-
-  struct DummyTrainingDataset {
-    dataset_size: usize,
-    input_size: usize,
-    output_size: usize,
-    inputs: Array2<f32>,
-    labels: Array2<f32>,
-  }
-
-  impl data_handler::TrainingDataset for DummyTrainingDataset {
-    fn get_dataset_size(&self) -> usize {self.dataset_size}
-    fn get_input_size(&self) -> usize {self.input_size}
-    fn get_output_size(&self) -> usize {self.output_size}
-    fn get_inputs(&self) -> &Array2<f32> {&self.inputs}
-    fn get_labels(&self) -> &Array2<f32> {&self.labels}
-
-    fn get_random_input(&self) -> Array1<f32> {
-      self.get_input(0)
-    }
-
-    fn get_random_input_and_output(&self) -> (Array1<f32>, Array1<f32>) {
-      (self.get_input(0), self.get_output(0))
-    }
-
-    fn get_input(&self, _index: usize) -> Array1<f32> {
-      self.inputs.row(0).to_owned()
-    }
-
-    fn get_output(&self, _index: usize) -> Array1<f32> {
-      self.labels.row(0).to_owned()
-    }
-  }
 
   fn tiny_dataset(input_size: usize, output_size: usize) -> Arc<dyn TrainingDataset> {
-    let data = DummyTrainingDataset {
-      dataset_size: 1,
-      input_size,
-      output_size,
-      inputs: Array2::zeros((1, input_size)),
-      labels: Array2::zeros((1, output_size)),
-    };
-
-    Arc::new(data)
+    Arc::new(DummyTrainingDataset::zeros(1, input_size, output_size))
   }
 
   #[test]
   fn validate_model_and_dataset_shapes_rejects_input_mismatch() {
-    let model: PredictiveCodingModel = tiny_model();
+    let model: PredictiveCodingModel = tiny_relu_model();
     let dataset: Arc<dyn TrainingDataset> = tiny_dataset(3, 10);
 
     let result = validate_model_and_dataset_shapes(&model, dataset.as_ref());
@@ -144,7 +92,7 @@ mod tests {
 
   #[test]
   fn validate_model_and_dataset_shapes_rejects_output_mismatch() {
-    let model = tiny_model();
+    let model = tiny_relu_model();
     let dataset = tiny_dataset(4, 9);
 
     let result = validate_model_and_dataset_shapes(&model, dataset.as_ref());

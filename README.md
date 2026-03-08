@@ -30,6 +30,9 @@ I have, at the time of writing, got a model architecture that converges on a rou
 - [ ] more advanced training strategies
   - [x] mini-batch sampling (optimise B samples in parallel, then for weight updates compute the mean $\Delta\bf{W}$ for the batches. 5.2. of 2506.06332)
 	- [ ] GPU training
+	- [ ] Dropout layers
+	- [ ] Layer normalisation ([medium post](https://medium.com/@sujathamudadla1213/layer-normalization-48ee115a14a4))
+	- [ ] GELU activation function
 - [ ] Benchmark tracking
 	- [x] Basic benchmarking
 	- [ ] Host a runner on my own known hardware (polyhymnia?) and dispatch a workflow to it on pushes to main.
