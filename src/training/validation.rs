@@ -108,10 +108,14 @@ mod tests {
   fn validate_training_config_rejects_zero_batch_size() {
     let config = TrainConfig {
       model_source: ModelSource::Config(String::from("unused.json")),
-      dataset: DataSetSource::MNIST {
+      training_dataset: DataSetSource::MNIST {
         input_idx_file: String::from("unused-images.idx"),
         output_idx_file: String::from("unused-labels.idx"),
       },
+      evaluation_dataset: Some(DataSetSource::MNIST {
+        input_idx_file: String::from("unused-images.idx"),
+        output_idx_file: String::from("unused-labels.idx"),
+      }),
       training_strategy: TrainingStrategy::MiniBatch { batch_size: 0 },
       training_steps: 1,
       report_interval: 0,
@@ -131,10 +135,14 @@ mod tests {
   fn validate_training_config_accepts_supported_strategies() {
     let single_thread = TrainConfig {
       model_source: ModelSource::Config(String::from("unused.json")),
-      dataset: DataSetSource::MNIST {
+      training_dataset: DataSetSource::MNIST {
         input_idx_file: String::from("unused-images.idx"),
         output_idx_file: String::from("unused-labels.idx"),
       },
+      evaluation_dataset: Some(DataSetSource::MNIST {
+        input_idx_file: String::from("unused-images.idx"),
+        output_idx_file: String::from("unused-labels.idx"),
+      }),
       training_strategy: TrainingStrategy::SingleThread,
       training_steps: 1,
       report_interval: 0,

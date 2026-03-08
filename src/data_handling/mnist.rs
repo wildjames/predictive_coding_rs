@@ -86,8 +86,6 @@ impl TrainingDataset for MnistDataset {
   fn get_dataset_size(&self) -> usize {self.dataset_size}
   fn get_input_size(&self) -> usize {self.input_size}
   fn get_output_size(&self) -> usize {self.output_size}
-  fn get_inputs(&self) -> &Array2<f32> {&self.inputs}
-  fn get_labels(&self) -> &Array2<f32> {&self.labels}
 
   fn get_random_input(&self) -> Array1<f32> {
     let rand_index: usize = usize::from_ne_bytes(rand::random()) % self.dataset_size;

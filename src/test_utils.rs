@@ -87,8 +87,6 @@ impl data_handler::TrainingDataset for DummyTrainingDataset {
   fn get_dataset_size(&self) -> usize {self.inputs.nrows()}
   fn get_input_size(&self) -> usize {self.inputs.ncols()}
   fn get_output_size(&self) -> usize {self.labels.ncols()}
-  fn get_inputs(&self) -> &Array2<f32> {&self.inputs}
-  fn get_labels(&self) -> &Array2<f32> {&self.labels}
 
   fn get_random_input(&self) -> Array1<f32> {
     self.get_input(0)
@@ -125,10 +123,14 @@ pub(crate) fn single_thread_train_config(
 ) -> TrainConfig {
   TrainConfig {
     model_source: ModelSource::Config(String::from("unused.json")),
-    dataset: DataSetSource::MNIST {
+    training_dataset: DataSetSource::MNIST {
       input_idx_file: String::from("unused-images.idx"),
       output_idx_file: String::from("unused-labels.idx"),
     },
+    evaluation_dataset: Some(DataSetSource::MNIST {
+      input_idx_file: String::from("unused-images.idx"),
+      output_idx_file: String::from("unused-labels.idx"),
+    }),
     training_strategy: TrainingStrategy::SingleThread,
     training_steps,
     report_interval,

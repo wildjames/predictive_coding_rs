@@ -82,10 +82,10 @@ fn run_benchmark(args: BenchArgs) -> Result<()> {
   info!("Running benchmark in debug mode. For more accurate benchmarking, compile with --release");
   let mut handler: Box<dyn TrainingHandler> = setup_training_run_handler(args.config, args.output_prefix.clone())?;
 
-  let step_data = run_benchmark_training_loop(handler.as_mut(), &format!("{}_{}", &args.output_prefix, "bench_run.csv"))?;
+  let step_data: Vec<BenchmarkStepData> = run_benchmark_training_loop(handler.as_mut(), &format!("{}_{}", &args.output_prefix, "bench_run.csv"))?;
 
   // Write the training params to "{output_prefix}/params.json"
-  let current_commit_hash_str = current_git_commit_hash()?;
+  let current_commit_hash_str: String = current_git_commit_hash()?;
 
   let result = BenchmarkResult {
     step_data,
@@ -97,7 +97,7 @@ fn run_benchmark(args: BenchArgs) -> Result<()> {
 
   // Write the benchmarking parameters, training parameters, and model configuration to files for posterity.
   // This is JSON, so probably a bit harder to read than the CSV file, but it does create a single file with all the relevant information for each benchmark run, which is nice.
-  let result_path = format!("{}_{}", args.output_prefix, "result.json");
+  let result_path: String = format!("{}_{}", args.output_prefix, "result.json");
   let result_file = std::fs::File::create(&result_path)
     .map_err(|source| PredictiveCodingError::io("create benchmark result", &result_path, source))?;
   serde_json::to_writer_pretty(
@@ -260,8 +260,6 @@ mod tests {
     assert_eq!(data.get_dataset_size(), 1);
     assert_eq!(data.get_input_size(), 4);
     assert_eq!(data.get_output_size(), 10);
-    assert_eq!(data.get_inputs().dim(), (1, 4));
-    assert_eq!(data.get_labels().dim(), (1, 10));
     assert_eq!(data.get_random_input(), data.get_input(0));
 
     let (input, output) = data.get_random_input_and_output();

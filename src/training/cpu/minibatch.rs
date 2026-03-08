@@ -154,17 +154,21 @@ mod tests {
   use crate::{
     test_utils::{DummyTrainingDataset, tiny_relu_model},
   };
-  use crate::training::configuration::TrainingStrategy;
+  use crate::training::configuration::{TrainingStrategy, DataSetSource, ModelSource};
   use crate::training::cpu::singlethreaded::SingleThreadTrainHandler;
   use ndarray::{array, Array2};
 
   fn dummy_config() -> TrainConfig {
     TrainConfig {
-      model_source: crate::training::configuration::ModelSource::Snapshot(String::from("unused.json")),
-      dataset: crate::training::configuration::DataSetSource::MNIST {
+      model_source: ModelSource::Snapshot(String::from("unused.json")),
+      training_dataset: DataSetSource::MNIST {
         input_idx_file: String::from("unused-images.idx"),
         output_idx_file: String::from("unused-labels.idx"),
       },
+      evaluation_dataset: Some(DataSetSource::MNIST {
+        input_idx_file: String::from("unused-images.idx"),
+        output_idx_file: String::from("unused-labels.idx"),
+      }),
       training_strategy: TrainingStrategy::SingleThread,
       training_steps: 1,
       report_interval: 0,
@@ -239,8 +243,6 @@ mod tests {
     assert_eq!(data.get_dataset_size(), 1);
     assert_eq!(data.get_input_size(), 4);
     assert_eq!(data.get_output_size(), 10);
-    assert_eq!(data.get_inputs().dim(), (1, 4));
-    assert_eq!(data.get_labels().dim(), (1, 10));
     assert_eq!(data.get_random_input(), data.get_input(0));
 
     let (input, output) = data.get_random_input_and_output();

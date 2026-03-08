@@ -59,7 +59,7 @@ pub fn setup_training_run_handler(
   let training_config: TrainConfig = load_training_config(&config)?;
   validate_training_config(&training_config)?;
 
-  let data: Arc<dyn TrainingDataset> = load_dataset(&training_config.dataset)?;
+  let data: Arc<dyn TrainingDataset> = load_dataset(&training_config.training_dataset)?;
   info!(
     "Loaded the dataset. I have {} samples",
     data.get_dataset_size()
