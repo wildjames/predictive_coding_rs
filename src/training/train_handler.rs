@@ -1,3 +1,4 @@
+use chrono::{TimeDelta, Utc};
 use tracing::info;
 
 use crate::{
@@ -24,7 +25,7 @@ pub trait TrainingHandler {
   }
 
   fn train_step(&mut self, _step: u32) -> Result<()>;
-  fn report_hook(&mut self, _step: u32) -> Result<()> {
+  fn report_hook(&mut self, _step: u32, _mean_step_time: TimeDelta) -> Result<()> {
     Ok(())
   }
 
@@ -88,14 +89,22 @@ pub fn run_supervised_training_loop(handler: &mut dyn TrainingHandler) -> Result
     &format!("{}_training_config.json", &handler.get_file_output_prefix())
   )?;
 
+  // Track the time taken for each step in the current reporting epoch
+  let mut step_times: Vec<TimeDelta> = Vec::new();
+
   // Main loop
   for step in 0..training_steps {
+    let start_time = Utc::now();
     handler.pre_step_hook(step)?;
     handler.train_step(step)?;
     handler.post_step_hook(step)?;
+    let elapsed: TimeDelta = Utc::now() - start_time;
+    step_times.push(elapsed);
 
     if (report_interval > 0) && (step % report_interval == 0) {
-      handler.report_hook(step)?;
+      let mean_step_time: TimeDelta = step_times.iter().sum::<TimeDelta>() / step_times.len() as i32;
+      handler.report_hook(step, mean_step_time)?;
+      step_times.clear();
     }
 
     if (snapshot_interval > 0) && (step % snapshot_interval == 0) {

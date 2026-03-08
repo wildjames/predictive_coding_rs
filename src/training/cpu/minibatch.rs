@@ -12,7 +12,8 @@ use crate::{
   }
 };
 
-use ndarray::{Array2};
+use chrono::TimeDelta;
+use ndarray::{Array1, Array2};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::sync::Arc;
 use tracing::{info, debug};
@@ -71,18 +72,23 @@ impl TrainingHandler for BatchTrainHandler {
   /// Train batch_size models in parallel on different data, then compute the average weight update across them and apply it to the model.
   fn train_step(&mut self, _step: u32) -> Result<()> {
     // I'll iterate over this with Rayon to parallelise the batch
-    let batch_indexes: Vec<u32> = (0..self.batch_size).collect();
+    let batch_inputs_and_outputs: Vec<(Array1<f32>, Array1<f32>)> = (0..self.batch_size)
+      .map(|_| self.data.get_random_input_and_output())
+      .collect();
 
     // Each element of the batch trains on a single sample, and we collect their weight changes as a result.
     // The batch weight changes will be a Vec of length batch_size, where each element is a Vec of length
     // num_layers, and each element of THAT is an array2 of the weight changes for the relevant layer.
-    let batch_weight_changes: Vec<Vec<Array2<f32>>> = batch_indexes
+    let batch_weight_changes: Vec<Vec<Array2<f32>>> = batch_inputs_and_outputs
       .into_par_iter()
-      .map(|b| {
-        debug!("Training batch element on a single example: {}", b);
-
+      .map(|(input_data, output_data)| {
+        debug!("Training on batch element with input {:?} and output {:?}", input_data, output_data);
         let mut model_clone: PredictiveCodingModel = self.model.clone();
-        set_rand_input_and_output(&mut model_clone, self.data.as_ref());
+
+        // Set the model input and output to the batch element's data
+        model_clone.set_input(input_data);
+        model_clone.set_output(output_data);
+
         model_clone.reinitialise_latents();
 
         // Train on this example until convergence.
@@ -93,6 +99,7 @@ impl TrainingHandler for BatchTrainHandler {
         model_clone.compute_weight_updates()
       })
       .collect();
+    debug!("Batch weight changes computed for {} samples", self.batch_size);
 
     // Average the weight changes across the batch. Sum outer Vec
     let sum_batch_weight_changes: Vec<Array2<f32>> = batch_weight_changes
@@ -117,7 +124,13 @@ impl TrainingHandler for BatchTrainHandler {
   }
 
 
-  fn report_hook(&mut self, step: u32) -> Result<()> {
+  fn report_hook(&mut self, step: u32, mean_step_time: TimeDelta) -> Result<()> {
+    debug!("After step {}: mean step duration = {:.2?}", step, mean_step_time);
+
+    // Estimate how much longer needed to complete the training
+    let est_time_to_finish: chrono::Duration = mean_step_time * (self.config.training_steps - step) as i32;
+    let est_finish_time: chrono::DateTime<chrono::Utc> = chrono::Utc::now() + est_time_to_finish;
+
     // The mini batch model is cloned for each batch element, so the main model never gets inference run on it
     // So, do that in the reporting step to get a sense of how the model is doing on the data.
     self.model.reinitialise_latents();
@@ -125,7 +138,10 @@ impl TrainingHandler for BatchTrainHandler {
     self.model.converge_values();
 
     let energy: f32 = self.model.read_total_energy();
-    info!("Step {}: Current model state: energy = {:.2}", step, energy);
+    info!(
+      "Step {}: Current model state: energy = {:.2}\tEstimated finish time: {}",
+      step, energy, est_finish_time.format("%Y-%m-%d %H:%M:%S")
+    );
     Ok(())
   }
 }
@@ -217,7 +233,7 @@ mod tests {
     );
 
     handler.pre_training_hook().unwrap();
-    handler.report_hook(0).unwrap();
+    handler.report_hook(0, TimeDelta::zero()).unwrap();
 
     let data = handler.get_data();
     assert_eq!(data.get_dataset_size(), 1);

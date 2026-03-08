@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use chrono::Duration;
 use ndarray::{Array1, Array2, array};
 use predictive_coding::{
   data_handling::data_handler,
@@ -190,7 +191,7 @@ impl TrainingHandler for RecordingTrainingHandler {
     Ok(())
   }
 
-  fn report_hook(&mut self, step: u32) -> Result<()> {
+  fn report_hook(&mut self, step: u32, _mean_step_time: Duration) -> Result<()> {
     self.events.push(format!("report:{step}"));
     Ok(())
   }

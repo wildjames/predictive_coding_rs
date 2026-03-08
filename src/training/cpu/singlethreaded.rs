@@ -14,7 +14,8 @@ use crate::{
 };
 
 use std::sync::Arc;
-use tracing::info;
+use chrono::TimeDelta;
+use tracing::{debug, info};
 
 
 pub struct SingleThreadTrainHandler {
@@ -70,9 +71,20 @@ impl TrainingHandler for SingleThreadTrainHandler {
     Ok(())
   }
 
-  fn report_hook(&mut self, step: u32) -> Result<()> {
+  fn report_hook(&mut self, step: u32, mean_step_time: TimeDelta) -> Result<()> {
+    debug!("After step {}: mean step duration = {:.2?}", step, mean_step_time);
+
+    // Estimate how much longer needed to complete the training
+    let est_time_to_finish: chrono::Duration = mean_step_time * (self.config.training_steps - step) as i32;
+    let est_finish_time: chrono::DateTime<chrono::Utc> = chrono::Utc::now() + est_time_to_finish;
+
     let energy: f32 = self.model.read_total_energy();
-    info!("Step {}: Current model state: energy = {:.2}", step, energy);
+    info!(
+      "Step {}: Current model state: energy = {:.2}\tEstimated finish time: {}",
+      step,
+      energy,
+      est_finish_time.format("%Y-%m-%d %H:%M:%S")
+    );
     Ok(())
   }
 }
