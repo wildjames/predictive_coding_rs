@@ -1,5 +1,7 @@
 # Predictive Coding in Rust
 
+[![Coverage Status](https://coveralls.io/repos/github/wildjames/predictive_coding_rs/badge.svg?branch=main)](https://coveralls.io/github/wildjames/predictive_coding_rs?branch=main)
+
 This is (for now) a basic implementation of predictive coding in Rust. The underlying algorithm is very interesting, and I've added some papers to this repo.
 
 I have, at the time of writing, got a model architecture that converges on a roughly accurate, low confidence MNIST classifier. The code is single-threaded, CPU-only right now (I want to use the `rust-cuda` ecosystem to add GPU support) and for relatively small models (~900 node, ~100,000 connections), I'm getting ~14ms per training sample. This works out to about 14 minutes to train on the full MNIST dataset of 60k images. Slow, but alright for a first pass. Critically, the implementation does converge on valid model parameters. From here, the focus will be on optimisation.
