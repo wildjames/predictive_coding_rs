@@ -5,7 +5,7 @@ use crate::{
   error::Result,
   model_structure::{
     model::{PredictiveCodingModel, PredictiveCodingModelConfig},
-    model_utils::{save_model_config, save_model_snapshot}
+    configuration::{save_model_config, save_model_snapshot}
   },
   training::configuration::{
     TrainConfig,
@@ -118,7 +118,7 @@ mod tests {
   use crate::{
     model_structure::{
       model::PredictiveCodingModelConfig,
-      model_utils::ActivationFunction
+      maths::ActivationFunction
     },
     training::configuration::{
       DataSetSource,

@@ -6,7 +6,7 @@ use crate::{
   error::{PredictiveCodingError, Result},
   model_structure::{
     model::PredictiveCodingModel,
-    model_utils::{
+    configuration::{
       create_from_config,
       load_model_snapshot
     }

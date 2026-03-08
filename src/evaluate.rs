@@ -10,7 +10,7 @@ use predictive_coding::{
     mnist::load_mnist
   },
   error::{PredictiveCodingError, Result},
-  model_structure::model_utils::{load_model_snapshot},
+  model_structure::configuration::load_model_snapshot,
   utils::logging
 };
 

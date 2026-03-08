@@ -198,7 +198,7 @@ mod tests {
 
   use crate::model_structure::{
     model::PredictiveCodingModelConfig,
-    model_utils::ActivationFunction
+    maths::ActivationFunction
   };
   use crate::training::configuration::TrainingStrategy;
   use ndarray::{array, Array2};

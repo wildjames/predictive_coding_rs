@@ -72,7 +72,7 @@ mod tests {
       gamma: 0.05,
       convergence_threshold: 0.0,
       convergence_steps: 1,
-      activation_function: crate::model_structure::model_utils::ActivationFunction::Relu,
+      activation_function: crate::model_structure::maths::ActivationFunction::Relu,
     })
   }
 
