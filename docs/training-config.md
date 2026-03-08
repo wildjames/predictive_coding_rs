@@ -21,7 +21,7 @@ The config is read by `load_training_config`, which deserializes the JSON direct
     "Config": "data/model_config.json"
   },
   "dataset": {
-    "MNIST": {
+    "IdxFormat": {
       "input_idx_file": "data/mnist/train-images-idx3-ubyte",
       "output_idx_file": "data/mnist/train-labels-idx1-ubyte"
     }
@@ -57,7 +57,7 @@ Although the Rust field comments mention defaults for `report_interval` and `sna
 That means:
 
 - `model_source` is an object with a single variant key such as `{ "Config": "..." }`.
-- `dataset` is an object with a single variant key such as `{ "MNIST": { ... } }`.
+- `dataset` is an object with a single variant key such as `{ "IdxFormat": { ... } }`.
 - `training_strategy` is either:
   - the string `"SingleThread"` for the unit variant (no strategy-specific parameters), or
   - an object such as `{ "MiniBatch": { "batch_size": 16 } }` for the struct variant, which does have strategy-specific parametes.
@@ -96,7 +96,7 @@ The only supported dataset source right now is MNIST:
 
 ```json
 "dataset": {
-  "MNIST": {
+  "IdxFormat": {
     "input_idx_file": "data/mnist/train-images-idx3-ubyte",
     "output_idx_file": "data/mnist/train-labels-idx1-ubyte"
   }
@@ -190,7 +190,7 @@ Fresh model, single-threaded:
     "Config": "data/model_config.json"
   },
   "dataset": {
-    "MNIST": {
+    "IdxFormat": {
       "input_idx_file": "data/mnist/train-images-idx3-ubyte",
       "output_idx_file": "data/mnist/train-labels-idx1-ubyte"
     }
@@ -210,7 +210,7 @@ Resume from a saved snapshot:
     "Snapshot": "data/model_1772887557/model_snapshot_step_50000.json"
   },
   "dataset": {
-    "MNIST": {
+    "IdxFormat": {
       "input_idx_file": "data/mnist/train-images-idx3-ubyte",
       "output_idx_file": "data/mnist/train-labels-idx1-ubyte"
     }

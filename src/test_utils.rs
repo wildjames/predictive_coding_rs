@@ -123,11 +123,11 @@ pub(crate) fn single_thread_train_config(
 ) -> TrainConfig {
   TrainConfig {
     model_source: ModelSource::Config(String::from("unused.json")),
-    training_dataset: DataSetSource::MNIST {
+    training_dataset: DataSetSource::IdxFormat {
       input_idx_file: String::from("unused-images.idx"),
       output_idx_file: String::from("unused-labels.idx"),
     },
-    evaluation_dataset: Some(DataSetSource::MNIST {
+    evaluation_dataset: Some(DataSetSource::IdxFormat {
       input_idx_file: String::from("unused-images.idx"),
       output_idx_file: String::from("unused-labels.idx"),
     }),

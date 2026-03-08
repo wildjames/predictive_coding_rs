@@ -37,12 +37,12 @@ pub fn load_model(model_source: &ModelSource) -> Result<PredictiveCodingModel> {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub enum DataSetSource {
-  MNIST { input_idx_file: String, output_idx_file: String }
+  IdxFormat { input_idx_file: String, output_idx_file: String }
 }
 
 pub fn load_dataset(dataset_source: &DataSetSource) -> Result<Arc<dyn TrainingDataset>> {
   let data = match dataset_source {
-    DataSetSource::MNIST {
+    DataSetSource::IdxFormat {
       input_idx_file,
       output_idx_file,
     } => load_mnist(input_idx_file, output_idx_file),
@@ -110,13 +110,13 @@ mod tests {
     "Snapshot": "test_data/model_snapshot_tiny.json"
   },
   "training_dataset": {
-    "MNIST": {
+    "IdxFormat": {
       "input_idx_file": "test_data/mnist/train-images-idx3-ubyte",
       "output_idx_file": "test_data/mnist/train-labels-idx1-ubyte"
     }
   },
   "evaluation_dataset": {
-    "MNIST": {
+    "IdxFormat": {
       "input_idx_file": "test_data/mnist/train-images-idx3-ubyte",
       "output_idx_file": "test_data/mnist/train-labels-idx1-ubyte"
     }
@@ -135,11 +135,11 @@ mod tests {
     let actual: TrainConfig = load_training_config(config_path.to_str().unwrap()).unwrap();
     let expected: TrainConfig = TrainConfig {
       model_source: ModelSource::Snapshot(String::from("test_data/model_snapshot_tiny.json")),
-      training_dataset: DataSetSource::MNIST {
+      training_dataset: DataSetSource::IdxFormat {
         input_idx_file: String::from("test_data/mnist/train-images-idx3-ubyte"),
         output_idx_file: String::from("test_data/mnist/train-labels-idx1-ubyte"),
       },
-      evaluation_dataset: Some(DataSetSource::MNIST {
+      evaluation_dataset: Some(DataSetSource::IdxFormat {
         input_idx_file: String::from("test_data/mnist/train-images-idx3-ubyte"),
         output_idx_file: String::from("test_data/mnist/train-labels-idx1-ubyte"),
       }),
@@ -163,7 +163,7 @@ mod tests {
     "Config": "test_data/model_config_tiny.json"
   },
   "dataset": {
-    "MNIST": {
+    "IdxFormat": {
       "input_idx_file": "test_data/mnist/train-images-idx3-ubyte",
       "output_idx_file": "test_data/mnist/train-labels-idx1-ubyte"
     }

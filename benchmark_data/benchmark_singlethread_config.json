@@ -3,7 +3,7 @@
     "Config": "benchmark_data/model_config.json"
   },
   "dataset": {
-    "MNIST": {
+    "IdxFormat": {
       "input_idx_file": "data/mnist/train-images-idx3-ubyte",
       "output_idx_file": "data/mnist/train-labels-idx1-ubyte"
     }

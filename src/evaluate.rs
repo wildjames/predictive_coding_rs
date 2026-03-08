@@ -1,33 +1,46 @@
 //! This program takes a trained modek, and evaluates it against the MNIST test dataset, reporting its accuracy, convergence time, and confidence when correct. It also saves these results to a file in the same directory as the model.
 
-use std::{path::Path, time::Instant};
+use std::{
+  path::Path,
+  time::Instant,
+  sync::Arc
+};
+
 use ndarray::Array1;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use predictive_coding::{
-  data_handling::{data_handler::TrainingDataset, mnist::{MnistDataset, load_mnist}},
-  error::{PredictiveCodingError, Result},
-  model_structure::{configuration::load_model_snapshot, model::PredictiveCodingModel},
+  data_handling::data_handler::TrainingDataset,
+  error::{
+    PredictiveCodingError,
+    Result
+  },
+  model_structure::{
+    configuration::load_model_snapshot,
+    model::PredictiveCodingModel
+  },
+  training::configuration::{
+    DataSetSource,
+    TrainConfig,
+    load_dataset,
+    load_training_config
+  },
   utils::logging
 };
 
 use clap::Parser;
 
-/// Evaluate a trained model against the MNIST test dataset, and report its accuracy.
+/// Evaluate a trained model against the evaluation dataset defined in the training configuration, and report its accuracy.
 #[derive(Parser)]
 struct EvalArgs {
   /// The model file to evaluate
   #[arg()]
   model_file: String,
 
-  /// IDX image file to evaluate against.
-  #[arg(long, default_value_t = String::from("data/mnist/t10k-images-idx3-ubyte"))]
-  input_idx_file: String,
-
-  /// IDX label file to evaluate against.
-  #[arg(long, default_value_t = String::from("data/mnist/t10k-labels-idx1-ubyte"))]
-  output_idx_file: String,
+  /// The training config file used to train the model defines an evaluation dataset.
+  #[arg(long)]
+  training_config: String
 }
 
 #[derive(Clone, Copy, Deserialize, Serialize, Debug, PartialEq)]
@@ -129,25 +142,26 @@ fn main() -> Result<()> {
 
   let args = EvalArgs::parse();
 
-  let mut model = load_model_snapshot(&args.model_file)?;
+  let mut model: PredictiveCodingModel = load_model_snapshot(&args.model_file)?;
   info!("Loaded model from {}", args.model_file);
 
+  let training_config: TrainConfig = load_training_config(&args.training_config)?;
+  let evaluation_source: DataSetSource = training_config
+    .evaluation_dataset
+    .ok_or_else(
+      || PredictiveCodingError::invalid_data(
+        "training config did not contain an evaluation dataset")
+    )?;
 
-  let data: MnistDataset = load_mnist(
-      &args.input_idx_file,
-      &args.output_idx_file
-  )?;
-  info!(
-    "Loaded the MNIST testing dataset. I have {} images",
-    data.get_dataset_size()
-  );
+  let data: Arc<dyn TrainingDataset>  = load_dataset(&evaluation_source)?;
+  info!("Loaded evaluation dataset from config file {}", args.training_config);
 
   // The output must be unpinned for evaluation
   // It was probably pinned during training, so just check
   model.unpin_output();
   let summary: EvaluationSummary = summarise_evaluation_samples(
     data.get_dataset_size(),
-    |i| evaluate_sample(&mut model, &data, i)
+    |i| evaluate_sample(&mut model, data.as_ref(), i)
   )?;
 
   info!(
