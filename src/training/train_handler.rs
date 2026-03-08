@@ -7,7 +7,10 @@ use crate::{
     model::{PredictiveCodingModel, PredictiveCodingModelConfig},
     model_utils::{save_model_config, save_model_snapshot}
   },
-  training::utils::{TrainConfig, save_training_config}
+  training::configuration::{
+    TrainConfig,
+    save_training_config
+  }
 };
 
 pub trait TrainingHandler {
@@ -117,7 +120,7 @@ mod tests {
       model::PredictiveCodingModelConfig,
       model_utils::ActivationFunction
     },
-    training::utils::{
+    training::configuration::{
       DataSetSource,
       ModelSource,
       TrainingStrategy

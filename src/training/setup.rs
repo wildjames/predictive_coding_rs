@@ -5,14 +5,16 @@ use crate::{
   training::{
     cpu_train,
     train_handler::TrainingHandler,
-    utils::{
+    configuration::{
       TrainConfig,
       TrainingStrategy,
       load_dataset,
       load_model,
-      load_training_config,
+      load_training_config
+    },
+    validation::{
       validate_model_and_dataset_shapes,
-      validate_training_config,
+      validate_training_config
     }
   }
 };

@@ -17,7 +17,7 @@ use predictive_coding::{
   training::{
     setup::setup_training_run_handler,
     train_handler::TrainingHandler,
-    utils::{
+    configuration::{
       TrainConfig,
       save_training_config
     }

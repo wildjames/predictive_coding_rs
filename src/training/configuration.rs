@@ -67,52 +67,6 @@ pub struct TrainConfig {
   pub snapshot_interval: u32,
 }
 
-/// Check the model and datased shapes for compatibility.
-pub fn validate_model_and_dataset_shapes(
-  model: &PredictiveCodingModel,
-  data: &TrainingDataset
-) -> Result<()> {
-  if data.dataset_size == 0 {
-    return Err(PredictiveCodingError::validation("Dataset is empty"));
-  }
-
-  let layer_sizes: Vec<usize> = model.get_layer_sizes();
-  let Some(model_input_size) = layer_sizes.first().copied() else {
-    return Err(PredictiveCodingError::validation("Model has no layers"));
-  };
-  let Some(model_output_size) = layer_sizes.last().copied() else {
-    return Err(PredictiveCodingError::validation("Model has no layers"));
-  };
-
-  if data.inputs.shape()[1] != model_input_size {
-    return Err(PredictiveCodingError::validation(format!(
-      "Model input size {} does not match dataset input size {}",
-      model_input_size,
-      data.inputs.shape()[1]
-    )));
-  }
-
-  if data.labels.shape()[1] != model_output_size {
-    return Err(PredictiveCodingError::validation(format!(
-      "Model output size {} does not match dataset output size {}",
-      model_output_size,
-      data.labels.shape()[1]
-    )));
-  }
-
-  Ok(())
-}
-
-pub fn validate_training_config(training_config: &TrainConfig) -> Result<()> {
-  match training_config.training_strategy {
-    TrainingStrategy::SingleThread => Ok(()),
-    TrainingStrategy::MiniBatch { batch_size } if batch_size > 0 => Ok(()),
-    TrainingStrategy::MiniBatch { .. } => Err(PredictiveCodingError::validation(
-      "Mini-batch training requires batch_size > 0"
-    )),
-  }
-}
-
 pub fn load_training_config(config_path: &str) -> Result<TrainConfig> {
   let config_str = std::fs::read_to_string(config_path)
     .map_err(|source| PredictiveCodingError::io("read training config", config_path, source))?;
@@ -132,11 +86,11 @@ pub fn save_training_config(config: &TrainConfig, output_path: &str) -> Result<(
   Ok(())
 }
 
+
 #[cfg(test)]
 mod tests {
   use super::*;
 
-  use ndarray::Array2;
   use std::{
     fs,
     path::{Path, PathBuf},
@@ -175,27 +129,6 @@ mod tests {
 
   fn write_file(path: &Path, contents: &str) {
     fs::write(path, contents).unwrap();
-  }
-
-  fn tiny_model() -> PredictiveCodingModel {
-    PredictiveCodingModel::new(&crate::model_structure::model::PredictiveCodingModelConfig {
-      layer_sizes: vec![4, 10],
-      alpha: 0.01,
-      gamma: 0.05,
-      convergence_threshold: 0.0,
-      convergence_steps: 1,
-      activation_function: crate::model_structure::model_utils::ActivationFunction::Relu,
-    })
-  }
-
-  fn tiny_dataset(input_size: usize, output_size: usize) -> TrainingDataset {
-    TrainingDataset {
-      dataset_size: 1,
-      input_size,
-      output_size,
-      inputs: Array2::zeros((1, input_size)),
-      labels: Array2::zeros((1, output_size)),
-    }
   }
 
   #[test]
@@ -277,59 +210,5 @@ mod tests {
     let error = load_training_config(config_path.to_str().unwrap()).unwrap_err();
 
     assert!(error.to_string().contains(&config_path.display().to_string()));
-  }
-
-  #[test]
-  fn validate_model_and_dataset_shapes_rejects_input_mismatch() {
-    let model: PredictiveCodingModel = tiny_model();
-    let dataset: TrainingDataset = tiny_dataset(3, 10);
-
-    let result = validate_model_and_dataset_shapes(&model, &dataset);
-
-    match result {
-      Err(PredictiveCodingError::Validation { message }) => {
-        assert_eq!(message, "Model input size 4 does not match dataset input size 3");
-      }
-      other => panic!("expected validation error, got {other:?}"),
-    }
-  }
-
-  #[test]
-  fn validate_model_and_dataset_shapes_rejects_output_mismatch() {
-    let model = tiny_model();
-    let dataset = tiny_dataset(4, 9);
-
-    let result = validate_model_and_dataset_shapes(&model, &dataset);
-
-    match result {
-      Err(PredictiveCodingError::Validation { message }) => {
-        assert_eq!(message, "Model output size 10 does not match dataset output size 9");
-      }
-      other => panic!("expected validation error, got {other:?}"),
-    }
-  }
-
-  #[test]
-  fn validate_training_config_rejects_zero_batch_size() {
-    let config = TrainConfig {
-      model_source: ModelSource::Config(String::from("unused.json")),
-      dataset: DataSetSource::MNIST {
-        input_idx_file: String::from("unused-images.idx"),
-        output_idx_file: String::from("unused-labels.idx"),
-      },
-      training_strategy: TrainingStrategy::MiniBatch { batch_size: 0 },
-      training_steps: 1,
-      report_interval: 0,
-      snapshot_interval: 0,
-    };
-
-    let result = validate_training_config(&config);
-
-    match result {
-      Err(PredictiveCodingError::Validation { message }) => {
-        assert_eq!(message, "Mini-batch training requires batch_size > 0");
-      }
-      other => panic!("expected validation error, got {other:?}"),
-    }
   }
 }
