@@ -14,6 +14,7 @@ use crate::{
 };
 
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub enum TrainingStrategy {
@@ -39,13 +40,15 @@ pub enum DataSetSource {
   MNIST { input_idx_file: String, output_idx_file: String }
 }
 
-pub fn load_dataset(dataset_source: &DataSetSource) -> Result<TrainingDataset> {
-  match dataset_source {
+pub fn load_dataset(dataset_source: &DataSetSource) -> Result<Arc<dyn TrainingDataset>> {
+  let data = match dataset_source {
     DataSetSource::MNIST {
       input_idx_file,
       output_idx_file,
     } => load_mnist(input_idx_file, output_idx_file),
-  }
+  };
+
+  Ok(Arc::new(data?))
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]

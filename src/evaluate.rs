@@ -1,14 +1,10 @@
 //! This program takes a trained modek, and evaluates it against the MNIST test dataset, reporting its accuracy, convergence time, and confidence when correct. It also saves these results to a file in the same directory as the model.
 
-use ndarray::Array1;
 use std::{path::Path, time::Instant};
 use tracing::info;
 
 use predictive_coding::{
-  data_handling::{
-    data_handler::TrainingDataset,
-    mnist::load_mnist
-  },
+  data_handling::{data_handler::TrainingDataset, mnist::{MnistDataset, load_mnist}},
   error::{PredictiveCodingError, Result},
   model_structure::configuration::load_model_snapshot,
   utils::logging
@@ -42,16 +38,16 @@ fn main() -> Result<()> {
   info!("Loaded model from {}", args.model_file);
 
 
-  let data: TrainingDataset = load_mnist(
+  let data: MnistDataset = load_mnist(
       &args.input_idx_file,
-      &args.output_idx_file)
-    ?;
+      &args.output_idx_file
+  )?;
   info!(
     "Loaded the MNIST testing dataset. I have {} images",
-    data.dataset_size
+    data.get_dataset_size()
   );
 
-  if data.dataset_size == 0 {
+  if data.get_dataset_size() == 0 {
     return Err(PredictiveCodingError::invalid_data("evaluation dataset is empty"));
   }
 
@@ -65,21 +61,16 @@ fn main() -> Result<()> {
   let mut sum_covnvergence_time: f32 = 0.0;
 
   // TODO: Multithread this
-  for i in 0..data.dataset_size {
-    let input_values: Array1<f32> = data.inputs
-      .row(i)
-      .to_owned();
+  for i in 0..data.get_dataset_size() {
+    let (input_values, output_values) = data.get_random_input_and_output();
 
-    // MNIST is one-hot encoded on the output layer
-    let output_label = data.labels
-      .row(i)
+    // MNIST is one-hot encoded on the index that the number correspoinse to
+    let output_label: usize = output_values
       .iter()
-      .position(|&x| x == 1.0)
-      .ok_or_else(|| {
-        PredictiveCodingError::invalid_data(format!(
-          "expected one-hot encoded label for sample {i}, but no active class was found"
-        ))
-      })? as u8;
+      .enumerate()
+      .max_by(|a, b| a.1.total_cmp(b.1))
+      .map(|(i, _)| i)
+      .ok_or_else(|| PredictiveCodingError::invalid_data("dataset produced an empty output label"))?;
 
     model.reinitialise_latents();
     model.set_input(input_values);
@@ -103,7 +94,7 @@ fn main() -> Result<()> {
       );
     }
 
-    if predicted_label == output_label as usize {
+    if predicted_label == output_label {
       correct_predictions += 1;
       confidence_sum += output_activations[predicted_label];
     }

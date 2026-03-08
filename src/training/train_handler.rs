@@ -1,5 +1,8 @@
 use tracing::info;
 
+#[cfg(test)]
+use std::sync::Arc;
+
 use crate::{
   data_handling::data_handler,
   error::Result,
@@ -16,7 +19,7 @@ use crate::{
 pub trait TrainingHandler {
   fn get_config(&self) -> &TrainConfig;
   fn get_model(&mut self) -> &mut PredictiveCodingModel;
-  fn get_data(&self) -> &data_handler::TrainingDataset;
+  fn get_data(&self) -> &dyn data_handler::TrainingDataset;
   fn get_file_output_prefix(&self) -> &String;
 
   fn pre_training_hook(&mut self) -> Result<()> {
@@ -126,7 +129,7 @@ mod tests {
       TrainingStrategy
     }
   };
-  use ndarray::Array2;
+  use ndarray::{Array1, Array2};
   use std::{
     fs,
     path::PathBuf,
@@ -163,10 +166,42 @@ mod tests {
     }
   }
 
+  struct DummyTrainingDataset {
+    dataset_size: usize,
+    input_size: usize,
+    output_size: usize,
+    inputs: Array2<f32>,
+    labels: Array2<f32>,
+  }
+
+  impl data_handler::TrainingDataset for DummyTrainingDataset {
+    fn get_dataset_size(&self) -> usize {self.dataset_size}
+    fn get_input_size(&self) -> usize {self.input_size}
+    fn get_output_size(&self) -> usize {self.output_size}
+    fn get_inputs(&self) -> &Array2<f32> {&self.inputs}
+    fn get_labels(&self) -> &Array2<f32> {&self.labels}
+
+    fn get_random_input(&self) -> Array1<f32> {
+      self.get_input(0)
+    }
+
+    fn get_random_input_and_output(&self) -> (Array1<f32>, Array1<f32>) {
+      (self.get_input(0), self.get_output(0))
+    }
+
+    fn get_input(&self, _index: usize) -> Array1<f32> {
+      self.inputs.row(0).to_owned()
+    }
+
+    fn get_output(&self, _index: usize) -> Array1<f32> {
+      self.labels.row(0).to_owned()
+    }
+  }
+
   struct RecordingHandler {
     config: TrainConfig,
     model: PredictiveCodingModel,
-    data: data_handler::TrainingDataset,
+    data: Arc<dyn data_handler::TrainingDataset>,
     file_output_prefix: String,
     events: Vec<String>,
   }
@@ -181,13 +216,14 @@ mod tests {
         convergence_steps: 1,
         activation_function: ActivationFunction::Relu,
       });
-      let data: data_handler::TrainingDataset = data_handler::TrainingDataset {
+
+      let data: Arc<dyn data_handler::TrainingDataset> = Arc::new(DummyTrainingDataset {
         dataset_size: 1,
         input_size: 4,
         output_size: 10,
         inputs: Array2::zeros((1, 4)),
         labels: Array2::zeros((1, 10)),
-      };
+      });
 
       RecordingHandler {
         config,
@@ -209,8 +245,8 @@ mod tests {
       &mut self.model
     }
 
-    fn get_data(&self) -> &data_handler::TrainingDataset {
-      &self.data
+    fn get_data(&self) -> &dyn data_handler::TrainingDataset {
+      self.data.as_ref()
     }
 
     fn get_file_output_prefix(&self) -> &String {
