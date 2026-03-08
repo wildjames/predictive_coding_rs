@@ -38,5 +38,5 @@ fn eval_binary_smoke_on_tiny_fixtures() {
 
   // Do the artifacts' contents look right?
   let eval_results = read_json(&eval_results_path);
-  assert_eq!(eval_results["total_predictions"], 1);
+  assert_eq!(eval_results["summary"]["total_predictions"], 1);
 }

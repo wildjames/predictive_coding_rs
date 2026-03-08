@@ -253,4 +253,31 @@ mod tests {
     let batch_weights = &batch_handler.get_model().get_layer(1).weights;
     assert_arrays_close(single_weights, batch_weights, 1e-6);
   }
+
+  #[test]
+  fn minibatch_report_hook_and_dataset_accessors_use_fixture_sample() {
+    let dataset = tiny_dataset();
+    let mut handler = BatchTrainHandler::new(
+      dummy_config(),
+      tiny_model(),
+      Arc::clone(&dataset),
+      String::from("unused/batch"),
+      2,
+    );
+
+    handler.pre_training_hook().unwrap();
+    handler.report_hook(0).unwrap();
+
+    let data = handler.get_data();
+    assert_eq!(data.get_dataset_size(), 1);
+    assert_eq!(data.get_input_size(), 4);
+    assert_eq!(data.get_output_size(), 10);
+    assert_eq!(data.get_inputs().dim(), (1, 4));
+    assert_eq!(data.get_labels().dim(), (1, 10));
+    assert_eq!(data.get_random_input(), data.get_input(0));
+
+    let (input, output) = data.get_random_input_and_output();
+    assert_eq!(input, data.get_input(0));
+    assert_eq!(output, data.get_output(0));
+  }
 }

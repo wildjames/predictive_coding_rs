@@ -45,12 +45,16 @@ struct BenchArgs {
 }
 
 
-fn current_git_commit_hash() -> Result<String> {
-  let command = "git rev-parse HEAD";
-  let output = std::process::Command::new("git")
-    .args(["rev-parse", "HEAD"])
+fn current_git_commit_hash_with_command(command_name: &str, args: &[&str]) -> Result<String> {
+  let command = if args.is_empty() {
+    command_name.to_string()
+  } else {
+    format!("{} {}", command_name, args.join(" "))
+  };
+  let output = std::process::Command::new(command_name)
+    .args(args)
     .output()
-    .map_err(|source| PredictiveCodingError::command_io(command, source))?;
+    .map_err(|source| PredictiveCodingError::command_io(command.clone(), source))?;
 
   if !output.status.success() {
     return Err(PredictiveCodingError::command_failed(
@@ -63,25 +67,18 @@ fn current_git_commit_hash() -> Result<String> {
   Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-fn main() -> Result<()> {
-  logging::setup_tracing(false);
-  info!("Starting benchmark run");
+fn current_git_commit_hash() -> Result<String> {
+  current_git_commit_hash_with_command("git", &["rev-parse", "HEAD"])
+}
 
+fn run_benchmark(args: BenchArgs) -> Result<()> {
   // Detect if this binary was compiled in release mode or not
   let release_mode: bool = !cfg!(debug_assertions);
   #[cfg(debug_assertions)]
   info!("Running benchmark in debug mode. For more accurate benchmarking, compile with --release");
+  let mut handler: Box<dyn TrainingHandler> = setup_training_run_handler(args.config, args.output_prefix.clone())?;
 
-  let args = BenchArgs::parse();
-  let mut handler: Box<dyn TrainingHandler> = setup_training_run_handler(
-    args.config,
-    args.output_prefix.clone()
-  )?;
-
-  let step_data = run_benchmark_training_loop(
-    handler.as_mut(),
-    &format!("{}_{}", &args.output_prefix, "bench_run.csv")
-  )?;
+  let step_data = run_benchmark_training_loop(handler.as_mut(), &format!("{}_{}", &args.output_prefix, "bench_run.csv"))?;
 
   // Write the training params to "{output_prefix}/params.json"
   let current_commit_hash_str = current_git_commit_hash()?;
@@ -108,6 +105,12 @@ fn main() -> Result<()> {
 
 }
 
+fn main() -> Result<()> {
+  logging::setup_tracing(false);
+  info!("Starting benchmark run");
+  run_benchmark(BenchArgs::parse())
+}
+
 #[derive(serde::Serialize)]
 struct BenchmarkResult {
   step_data: Vec<BenchmarkStepData>,
@@ -131,11 +134,10 @@ fn run_benchmark_training_loop(
   handler.pre_training_hook()?;
 
   // Time each training step and write to a csv file
-  if let Some(parent) = Path::new(bench_run_outfile).parent()
-    && !parent.as_os_str().is_empty() {
-      std::fs::create_dir_all(parent)
-        .map_err(|source| PredictiveCodingError::io("create benchmark output directory", parent, source))?;
-    }
+  if let Some(parent) = Path::new(bench_run_outfile).parent().filter(|path| !path.as_os_str().is_empty()) {
+    std::fs::create_dir_all(parent)
+      .map_err(|source| PredictiveCodingError::io("create benchmark output directory", parent, source))?;
+  }
   let mut wtr = csv::Writer::from_path(bench_run_outfile)
     .map_err(|source| PredictiveCodingError::csv("create benchmark writer", bench_run_outfile, source))?;
   wtr.write_record(["step", "time_ms"])
@@ -187,4 +189,224 @@ fn run_benchmark_training_loop(
   handler.post_training_hook()?;
 
   Ok(benchmark_data)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  use ndarray::{Array1, Array2, array};
+  use predictive_coding::{
+    data_handling::data_handler,
+    model_structure::maths::ActivationFunction,
+    training::configuration::{
+      DataSetSource,
+      ModelSource,
+      TrainingStrategy,
+    },
+  };
+  use std::{
+    fs,
+    path::PathBuf,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+  };
+
+  struct TempDir {
+    path: PathBuf,
+  }
+
+  impl TempDir {
+    fn new(prefix: &str) -> Self {
+      let unique_id = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+      let path = std::env::temp_dir().join(format!(
+        "predictive_coding_{prefix}_{}_{}",
+        std::process::id(),
+        unique_id
+      ));
+      fs::create_dir_all(&path).unwrap();
+      TempDir { path }
+    }
+
+    fn join(&self, filename: &str) -> PathBuf {
+      self.path.join(filename)
+    }
+  }
+
+  impl Drop for TempDir {
+    fn drop(&mut self) {
+      let _ = fs::remove_dir_all(&self.path);
+    }
+  }
+
+  struct DummyTrainingDataset {
+    inputs: Array2<f32>,
+    labels: Array2<f32>,
+  }
+
+  impl data_handler::TrainingDataset for DummyTrainingDataset {
+    fn get_dataset_size(&self) -> usize {self.inputs.nrows()}
+    fn get_input_size(&self) -> usize {self.inputs.ncols()}
+    fn get_output_size(&self) -> usize {self.labels.ncols()}
+    fn get_inputs(&self) -> &Array2<f32> {&self.inputs}
+    fn get_labels(&self) -> &Array2<f32> {&self.labels}
+
+    fn get_random_input(&self) -> Array1<f32> {
+      self.get_input(0)
+    }
+
+    fn get_random_input_and_output(&self) -> (Array1<f32>, Array1<f32>) {
+      (self.get_input(0), self.get_output(0))
+    }
+
+    fn get_input(&self, _index: usize) -> Array1<f32> {
+      self.inputs.row(0).to_owned()
+    }
+
+    fn get_output(&self, _index: usize) -> Array1<f32> {
+      self.labels.row(0).to_owned()
+    }
+  }
+
+  struct RecordingHandler {
+    config: TrainConfig,
+    model: predictive_coding::model_structure::model::PredictiveCodingModel,
+    data: Arc<dyn data_handler::TrainingDataset>,
+    file_output_prefix: String,
+    steps: Vec<u32>,
+  }
+
+  impl RecordingHandler {
+    fn new(output_prefix: String) -> Self {
+      let model = predictive_coding::model_structure::model::PredictiveCodingModel::new(
+        &PredictiveCodingModelConfig {
+          layer_sizes: vec![4, 10],
+          alpha: 0.01,
+          gamma: 0.05,
+          convergence_threshold: 0.0,
+          convergence_steps: 1,
+          activation_function: ActivationFunction::Relu,
+        },
+      );
+      let data: Arc<dyn data_handler::TrainingDataset> = Arc::new(DummyTrainingDataset {
+        inputs: array![[1.0, 0.0, 0.5, 0.25]],
+        labels: array![[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]],
+      });
+
+      RecordingHandler {
+        config: TrainConfig {
+          model_source: ModelSource::Config(String::from("unused.json")),
+          dataset: DataSetSource::MNIST {
+            input_idx_file: String::from("unused-images.idx"),
+            output_idx_file: String::from("unused-labels.idx"),
+          },
+          training_strategy: TrainingStrategy::SingleThread,
+          training_steps: 2,
+          report_interval: 0,
+          snapshot_interval: 0,
+        },
+        model,
+        data,
+        file_output_prefix: output_prefix,
+        steps: Vec::new(),
+      }
+    }
+  }
+
+  impl TrainingHandler for RecordingHandler {
+    fn get_config(&self) -> &TrainConfig {
+      &self.config
+    }
+
+    fn get_model(&mut self) -> &mut predictive_coding::model_structure::model::PredictiveCodingModel {
+      &mut self.model
+    }
+
+    fn get_data(&self) -> &dyn data_handler::TrainingDataset {
+      self.data.as_ref()
+    }
+
+    fn get_file_output_prefix(&self) -> &String {
+      &self.file_output_prefix
+    }
+
+    fn train_step(&mut self, step: u32) -> Result<()> {
+      self.steps.push(step);
+      Ok(())
+    }
+  }
+
+  #[test]
+  fn current_git_commit_hash_helper_handles_success_and_failure_cases() {
+    let success: String = current_git_commit_hash_with_command("sh", &["-c", "printf 'abc123\\n'"]).unwrap();
+    assert_eq!(success, "abc123");
+
+    let failure = current_git_commit_hash_with_command("sh", &["-c", "printf 'boom\\n' >&2; exit 2"]);
+    assert!(matches!(
+      failure,
+      Err(PredictiveCodingError::CommandFailed { stderr, .. }) if stderr.contains("boom")
+    ));
+
+    let spawn_failure: std::result::Result<String, PredictiveCodingError> = current_git_commit_hash_with_command("/definitely/missing/git", &[]);
+    assert!(matches!(spawn_failure, Err(PredictiveCodingError::CommandIo { .. })));
+  }
+
+  #[test]
+  fn benchmark_loop_writes_csv_and_artifacts() {
+    let temp_dir: TempDir = TempDir::new("benchmark_loop");
+    let output_prefix: String = temp_dir.join("nested/bench").display().to_string();
+    let bench_csv: PathBuf = temp_dir.join("nested/bench_run.csv");
+    let mut handler: RecordingHandler = RecordingHandler::new(output_prefix.clone());
+
+    let step_data: Vec<BenchmarkStepData> = run_benchmark_training_loop(&mut handler, bench_csv.to_str().unwrap()).unwrap();
+
+    assert_eq!(handler.steps, vec![0, 1]);
+    assert_eq!(step_data.len(), 2);
+    assert!(bench_csv.exists());
+    assert!(Path::new(&format!("{}_model_config.json", output_prefix)).exists());
+    assert!(Path::new(&format!("{}_training_config.json", output_prefix)).exists());
+    assert!(Path::new(&format!("{}_final_model.json", output_prefix)).exists());
+
+    let csv_output = fs::read_to_string(bench_csv).unwrap();
+    assert!(csv_output.contains("step,time_ms"));
+    assert!(csv_output.contains("0,"));
+    assert!(csv_output.contains("1,"));
+  }
+
+  #[test]
+  fn recording_handler_exposes_dataset_fixture() {
+    let handler: RecordingHandler = RecordingHandler::new(String::from("unused/bench"));
+    let data: &dyn data_handler::TrainingDataset = handler.get_data();
+
+    assert_eq!(data.get_dataset_size(), 1);
+    assert_eq!(data.get_input_size(), 4);
+    assert_eq!(data.get_output_size(), 10);
+    assert_eq!(data.get_inputs().dim(), (1, 4));
+    assert_eq!(data.get_labels().dim(), (1, 10));
+    assert_eq!(data.get_random_input(), data.get_input(0));
+
+    let (input, output) = data.get_random_input_and_output();
+    assert_eq!(input, data.get_input(0));
+    assert_eq!(output, data.get_output(0));
+  }
+
+  #[test]
+  fn run_benchmark_writes_result_payload_in_process() {
+    let temp_dir: TempDir = TempDir::new("benchmark_run_main_path");
+    let output_prefix: String = temp_dir.join("end_to_end/bench").display().to_string();
+
+    run_benchmark(BenchArgs {
+      config: String::from("test_data/bench_single_thread_config.json"),
+      output_prefix: output_prefix.clone(),
+    })
+    .unwrap();
+
+    let result_path: String = format!("{}_result.json", output_prefix);
+    let result_json: serde_json::Value = serde_json::from_str(&fs::read_to_string(result_path).unwrap()).unwrap();
+    assert_eq!(result_json["step_data"].as_array().unwrap().len(), 2);
+    assert!(!result_json["git_commit_hash"].as_str().unwrap().is_empty());
+  }
 }
