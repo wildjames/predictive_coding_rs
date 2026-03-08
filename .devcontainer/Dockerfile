@@ -22,3 +22,7 @@ RUN apt-get update && \
     libglx-mesa0 \
     mesa-utils \
     protobuf-compiler
+
+# Install cargo-llvm-cov
+USER vscode
+RUN cargo +stable install cargo-llvm-cov --locked

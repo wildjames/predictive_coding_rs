@@ -7,3 +7,9 @@ pub mod error;
 pub mod model_structure;
 pub mod training;
 pub mod utils;
+
+#[cfg(test)]
+extern crate self as predictive_coding;
+
+#[cfg(test)]
+mod test_utils;

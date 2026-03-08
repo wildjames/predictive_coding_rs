@@ -14,6 +14,7 @@ use crate::{
 };
 
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub enum TrainingStrategy {
@@ -36,16 +37,18 @@ pub fn load_model(model_source: &ModelSource) -> Result<PredictiveCodingModel> {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub enum DataSetSource {
-  MNIST { input_idx_file: String, output_idx_file: String }
+  IdxFormat { input_idx_file: String, output_idx_file: String }
 }
 
-pub fn load_dataset(dataset_source: &DataSetSource) -> Result<TrainingDataset> {
-  match dataset_source {
-    DataSetSource::MNIST {
+pub fn load_dataset(dataset_source: &DataSetSource) -> Result<Arc<dyn TrainingDataset>> {
+  let data = match dataset_source {
+    DataSetSource::IdxFormat {
       input_idx_file,
       output_idx_file,
     } => load_mnist(input_idx_file, output_idx_file),
-  }
+  };
+
+  Ok(Arc::new(data?))
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -54,7 +57,11 @@ pub struct TrainConfig {
   pub model_source: ModelSource,
 
   /// The dataset to train on
-  pub dataset: DataSetSource,
+  pub training_dataset: DataSetSource,
+  /// An optional dataset can be given, which will later be used as the
+  /// default evaluation dataset to see how well the model performs.
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub evaluation_dataset: Option<DataSetSource>,
 
   /// What training strategy to use
   pub training_strategy: TrainingStrategy,
@@ -90,46 +97,7 @@ pub fn save_training_config(config: &TrainConfig, output_path: &str) -> Result<(
 #[cfg(test)]
 mod tests {
   use super::*;
-
-  use std::{
-    fs,
-    path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH}
-  };
-
-  struct TempDir {
-    path: PathBuf,
-  }
-
-  impl TempDir {
-    fn new(prefix: &str) -> Self {
-      let unique_id = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-      let path = std::env::temp_dir().join(format!(
-        "predictive_coding_{prefix}_{}_{}",
-        std::process::id(),
-        unique_id
-      ));
-      fs::create_dir_all(&path).unwrap();
-      TempDir { path }
-    }
-
-    fn join(&self, filename: &str) -> PathBuf {
-      self.path.join(filename)
-    }
-  }
-
-  impl Drop for TempDir {
-    fn drop(&mut self) {
-      let _ = fs::remove_dir_all(&self.path);
-    }
-  }
-
-  fn write_file(path: &Path, contents: &str) {
-    fs::write(path, contents).unwrap();
-  }
+  use crate::test_utils::{TempDir, write_file};
 
   #[test]
   fn load_training_config_parses_expected_json_shape() {
@@ -141,8 +109,14 @@ mod tests {
   "model_source": {
     "Snapshot": "test_data/model_snapshot_tiny.json"
   },
-  "dataset": {
-    "MNIST": {
+  "training_dataset": {
+    "IdxFormat": {
+      "input_idx_file": "test_data/mnist/train-images-idx3-ubyte",
+      "output_idx_file": "test_data/mnist/train-labels-idx1-ubyte"
+    }
+  },
+  "evaluation_dataset": {
+    "IdxFormat": {
       "input_idx_file": "test_data/mnist/train-images-idx3-ubyte",
       "output_idx_file": "test_data/mnist/train-labels-idx1-ubyte"
     }
@@ -161,10 +135,14 @@ mod tests {
     let actual: TrainConfig = load_training_config(config_path.to_str().unwrap()).unwrap();
     let expected: TrainConfig = TrainConfig {
       model_source: ModelSource::Snapshot(String::from("test_data/model_snapshot_tiny.json")),
-      dataset: DataSetSource::MNIST {
+      training_dataset: DataSetSource::IdxFormat {
         input_idx_file: String::from("test_data/mnist/train-images-idx3-ubyte"),
         output_idx_file: String::from("test_data/mnist/train-labels-idx1-ubyte"),
       },
+      evaluation_dataset: Some(DataSetSource::IdxFormat {
+        input_idx_file: String::from("test_data/mnist/train-images-idx3-ubyte"),
+        output_idx_file: String::from("test_data/mnist/train-labels-idx1-ubyte"),
+      }),
       training_strategy: TrainingStrategy::MiniBatch { batch_size: 4 },
       training_steps: 12,
       report_interval: 3,
@@ -185,7 +163,7 @@ mod tests {
     "Config": "test_data/model_config_tiny.json"
   },
   "dataset": {
-    "MNIST": {
+    "IdxFormat": {
       "input_idx_file": "test_data/mnist/train-images-idx3-ubyte",
       "output_idx_file": "test_data/mnist/train-labels-idx1-ubyte"
     }

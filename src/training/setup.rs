@@ -3,7 +3,10 @@ use crate::{
   error::{PredictiveCodingError, Result},
   model_structure::model::PredictiveCodingModel,
   training::{
-    cpu_train,
+    cpu::{
+      minibatch::BatchTrainHandler,
+      singlethreaded::SingleThreadTrainHandler
+    },
     train_handler::TrainingHandler,
     configuration::{
       TrainConfig,
@@ -19,23 +22,24 @@ use crate::{
   }
 };
 
+use std::sync::Arc;
 use tracing::{info};
 
 
 fn get_handler(
   training_config: TrainConfig,
   model: PredictiveCodingModel,
-  data: TrainingDataset,
+  data: Arc<dyn TrainingDataset>,
   file_output_prefix: String
 ) -> Box<dyn TrainingHandler> {
   match training_config.training_strategy.clone() {
-    TrainingStrategy::SingleThread => Box::new(cpu_train::SingleThreadTrainHandler::new(
+    TrainingStrategy::SingleThread => Box::new(SingleThreadTrainHandler::new(
       training_config,
       model,
       data,
       file_output_prefix
     )),
-    TrainingStrategy::MiniBatch { batch_size } => Box::new(cpu_train::BatchTrainHandler::new(
+    TrainingStrategy::MiniBatch { batch_size } => Box::new(BatchTrainHandler::new(
       training_config,
       model,
       data,
@@ -55,10 +59,10 @@ pub fn setup_training_run_handler(
   let training_config: TrainConfig = load_training_config(&config)?;
   validate_training_config(&training_config)?;
 
-  let data: TrainingDataset = load_dataset(&training_config.dataset)?;
+  let data: Arc<dyn TrainingDataset> = load_dataset(&training_config.training_dataset)?;
   info!(
     "Loaded the dataset. I have {} samples",
-    data.dataset_size
+    data.get_dataset_size()
   );
 
   // Build the model
@@ -68,7 +72,7 @@ pub fn setup_training_run_handler(
     model.get_layer_sizes()
   );
 
-  validate_model_and_dataset_shapes(&model, &data)?;
+  validate_model_and_dataset_shapes(&model, data.as_ref())?;
 
   // Make sure that the output directory exists
   if let Some(output_dir) = std::path::Path::new(&output_prefix)

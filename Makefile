@@ -17,3 +17,6 @@ train: build
 
 bench: build
 	cargo run --release --bin bench
+
+coverage: build
+	cargo llvm-cov

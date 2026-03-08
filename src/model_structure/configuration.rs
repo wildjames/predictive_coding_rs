@@ -61,49 +61,11 @@ pub fn load_model_snapshot(filename: &str) -> Result<PredictiveCodingModel> {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::test_utils::{TempDir, write_file};
 
   use crate::model_structure::maths::ActivationFunction;
 
   use ndarray::array;
-  use std::{
-    fs,
-    path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH}
-  };
-
-  struct TempDir {
-    path: PathBuf,
-  }
-
-  impl TempDir {
-    fn new(prefix: &str) -> Self {
-      let unique_id = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-      let path = std::env::temp_dir().join(format!(
-        "predictive_coding_{prefix}_{}_{}",
-        std::process::id(),
-        unique_id
-      ));
-      fs::create_dir_all(&path).unwrap();
-      TempDir { path }
-    }
-
-    fn join(&self, filename: &str) -> PathBuf {
-      self.path.join(filename)
-    }
-  }
-
-  impl Drop for TempDir {
-    fn drop(&mut self) {
-      let _ = fs::remove_dir_all(&self.path);
-    }
-  }
-
-  fn write_file(path: &Path, contents: &str) {
-    fs::write(path, contents).unwrap();
-  }
 
   #[test]
   fn load_model_config_parses_expected_json_shape() {

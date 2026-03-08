@@ -26,10 +26,8 @@ fn eval_binary_smoke_on_tiny_fixtures() {
     Command::new(env!("CARGO_BIN_EXE_eval"))
       .current_dir(&root)
       .arg(&model_path)
-      .arg("--input-idx-file")
-      .arg("test_data/mnist/t10k-images-idx3-ubyte")
-      .arg("--output-idx-file")
-      .arg("test_data/mnist/t10k-labels-idx1-ubyte"),
+      .arg("--training-config")
+      .arg("test_data/baselines/single_thread/train/model_training_config.json")
   );
 
   // Did we produce the correct artifacts?
@@ -38,5 +36,5 @@ fn eval_binary_smoke_on_tiny_fixtures() {
 
   // Do the artifacts' contents look right?
   let eval_results = read_json(&eval_results_path);
-  assert_eq!(eval_results["total_predictions"], 1);
+  assert_eq!(eval_results["summary"]["total_predictions"], 1);
 }

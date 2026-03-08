@@ -74,8 +74,36 @@ fn load_idx<P: AsRef<Path>>(path: P) -> Result<IdxData> {
 }
 
 
+pub struct MnistDataset {
+  dataset_size: usize,
+  input_size: usize,
+  output_size: usize,
+  inputs: Array2<f32>,
+  labels: Array2<f32>,
+}
+
+impl TrainingDataset for MnistDataset {
+  fn get_dataset_size(&self) -> usize {self.dataset_size}
+  fn get_input_size(&self) -> usize {self.input_size}
+  fn get_output_size(&self) -> usize {self.output_size}
+
+  fn get_random_input(&self) -> Array1<f32> {
+    let rand_index: usize = usize::from_ne_bytes(rand::random()) % self.dataset_size;
+    self.get_input(rand_index)
+  }
+
+  fn get_random_input_and_output(&self) -> (Array1<f32>, Array1<f32>) {
+    let rand_index: usize = usize::from_ne_bytes(rand::random()) % self.dataset_size;
+    (self.get_input(rand_index), self.get_output(rand_index))
+  }
+
+  fn get_input(&self, index: usize) -> Array1<f32> {self.inputs.row(index).to_owned()}
+  fn get_output(&self, index: usize) -> Array1<f32> {self.labels.row(index).to_owned()}
+}
+
+
 /// Load MNIST images and labels from IDX files.
-pub fn load_mnist<P: AsRef<Path>>(images_path: P, labels_path: P) -> Result<TrainingDataset> {
+pub fn load_mnist<P: AsRef<Path>>(images_path: P, labels_path: P) -> Result<MnistDataset> {
   let images_path = images_path.as_ref();
   let labels_path = labels_path.as_ref();
   info!(
@@ -132,7 +160,8 @@ pub fn load_mnist<P: AsRef<Path>>(images_path: P, labels_path: P) -> Result<Trai
   }
 
   // Create label array, one-hot on the label index.
-  let mut labels: Array2<f32> = Array2::zeros((num_labels, 10)); // 10 classes for MNIST
+  let output_size: usize = 10; // MNIST has 10 classes (digits 0-9)
+  let mut labels: Array2<f32> = Array2::zeros((num_labels, output_size));
   debug!("Parsing label data into array...");
   for i in 0..num_labels {
     let label_value = labels_idx.data[i] as usize;
@@ -140,11 +169,11 @@ pub fn load_mnist<P: AsRef<Path>>(images_path: P, labels_path: P) -> Result<Trai
   }
 
   debug!("Finished parsing MNIST dataset.");
-  Ok(TrainingDataset {
+  Ok(MnistDataset {
     dataset_size: num_images,
     inputs: images,
     labels,
     input_size,
-    output_size: 10,
+    output_size,
   })
 }

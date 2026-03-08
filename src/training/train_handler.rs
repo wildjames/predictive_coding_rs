@@ -1,3 +1,4 @@
+use chrono::{TimeDelta, Utc};
 use tracing::info;
 
 use crate::{
@@ -16,7 +17,7 @@ use crate::{
 pub trait TrainingHandler {
   fn get_config(&self) -> &TrainConfig;
   fn get_model(&mut self) -> &mut PredictiveCodingModel;
-  fn get_data(&self) -> &data_handler::TrainingDataset;
+  fn get_data(&self) -> &dyn data_handler::TrainingDataset;
   fn get_file_output_prefix(&self) -> &String;
 
   fn pre_training_hook(&mut self) -> Result<()> {
@@ -24,7 +25,7 @@ pub trait TrainingHandler {
   }
 
   fn train_step(&mut self, _step: u32) -> Result<()>;
-  fn report_hook(&mut self, _step: u32) -> Result<()> {
+  fn report_hook(&mut self, _step: u32, _mean_step_time: TimeDelta) -> Result<()> {
     Ok(())
   }
 
@@ -88,14 +89,22 @@ pub fn run_supervised_training_loop(handler: &mut dyn TrainingHandler) -> Result
     &format!("{}_training_config.json", &handler.get_file_output_prefix())
   )?;
 
+  // Track the time taken for each step in the current reporting epoch
+  let mut step_times: Vec<TimeDelta> = Vec::new();
+
   // Main loop
   for step in 0..training_steps {
+    let start_time = Utc::now();
     handler.pre_step_hook(step)?;
     handler.train_step(step)?;
     handler.post_step_hook(step)?;
+    let elapsed: TimeDelta = Utc::now() - start_time;
+    step_times.push(elapsed);
 
     if (report_interval > 0) && (step % report_interval == 0) {
-      handler.report_hook(step)?;
+      let mean_step_time: TimeDelta = step_times.iter().sum::<TimeDelta>() / step_times.len() as i32;
+      handler.report_hook(step, mean_step_time)?;
+      step_times.clear();
     }
 
     if (snapshot_interval > 0) && (step % snapshot_interval == 0) {
@@ -114,160 +123,20 @@ pub fn run_supervised_training_loop(handler: &mut dyn TrainingHandler) -> Result
 #[cfg(test)]
 mod tests {
   use super::*;
-
-  use crate::{
-    model_structure::{
-      model::PredictiveCodingModelConfig,
-      maths::ActivationFunction
-    },
-    training::configuration::{
-      DataSetSource,
-      ModelSource,
-      TrainingStrategy
-    }
+  use crate::test_utils::{
+    RecordingTrainingHandler,
+    TempDir,
+    single_thread_train_config,
   };
-  use ndarray::Array2;
-  use std::{
-    fs,
-    path::PathBuf,
-    time::{SystemTime, UNIX_EPOCH}
-  };
-
-  struct TempDir {
-    path: PathBuf,
-  }
-
-  impl TempDir {
-    fn new(prefix: &str) -> Self {
-      let unique_id = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-      let path = std::env::temp_dir().join(format!(
-        "predictive_coding_{prefix}_{}_{}",
-        std::process::id(),
-        unique_id
-      ));
-      fs::create_dir_all(&path).unwrap();
-      TempDir { path }
-    }
-
-    fn path(&self) -> &PathBuf {
-      &self.path
-    }
-  }
-
-  impl Drop for TempDir {
-    fn drop(&mut self) {
-      let _ = fs::remove_dir_all(&self.path);
-    }
-  }
-
-  struct RecordingHandler {
-    config: TrainConfig,
-    model: PredictiveCodingModel,
-    data: data_handler::TrainingDataset,
-    file_output_prefix: String,
-    events: Vec<String>,
-  }
-
-  impl RecordingHandler {
-    fn new(config: TrainConfig, output_prefix: String) -> Self {
-      let model: PredictiveCodingModel = PredictiveCodingModel::new(&PredictiveCodingModelConfig {
-        layer_sizes: vec![4, 10],
-        alpha: 0.01,
-        gamma: 0.05,
-        convergence_threshold: 0.0,
-        convergence_steps: 1,
-        activation_function: ActivationFunction::Relu,
-      });
-      let data: data_handler::TrainingDataset = data_handler::TrainingDataset {
-        dataset_size: 1,
-        input_size: 4,
-        output_size: 10,
-        inputs: Array2::zeros((1, 4)),
-        labels: Array2::zeros((1, 10)),
-      };
-
-      RecordingHandler {
-        config,
-        model,
-        data,
-        file_output_prefix: output_prefix,
-        events: Vec::new(),
-      }
-    }
-  }
-
-  // Construct a dummy handler which just records what it's done, in what order.
-  impl TrainingHandler for RecordingHandler {
-    fn get_config(&self) -> &TrainConfig {
-      &self.config
-    }
-
-    fn get_model(&mut self) -> &mut PredictiveCodingModel {
-      &mut self.model
-    }
-
-    fn get_data(&self) -> &data_handler::TrainingDataset {
-      &self.data
-    }
-
-    fn get_file_output_prefix(&self) -> &String {
-      &self.file_output_prefix
-    }
-
-    fn pre_training_hook(&mut self) -> Result<()> {
-      self.events.push(String::from("pre_training"));
-      Ok(())
-    }
-
-    fn train_step(&mut self, step: u32) -> Result<()> {
-      self.events.push(format!("train_step:{step}"));
-      Ok(())
-    }
-
-    fn report_hook(&mut self, step: u32) -> Result<()> {
-      self.events.push(format!("report:{step}"));
-      Ok(())
-    }
-
-    fn pre_step_hook(&mut self, step: u32) -> Result<()> {
-      self.events.push(format!("pre_step:{step}"));
-      Ok(())
-    }
-
-    fn post_step_hook(&mut self, step: u32) -> Result<()> {
-      self.events.push(format!("post_step:{step}"));
-      Ok(())
-    }
-
-    fn post_training_hook(&mut self) -> Result<()> {
-      self.events.push(String::from("post_training"));
-      let final_output_path = format!("{}_final_model.json", self.get_file_output_prefix());
-      save_model_snapshot(self.get_model(), &final_output_path)
-    }
-  }
-
-  fn test_config(training_steps: u32, report_interval: u32, snapshot_interval: u32) -> TrainConfig {
-    TrainConfig {
-      model_source: ModelSource::Config(String::from("unused.json")),
-      dataset: DataSetSource::MNIST {
-        input_idx_file: String::from("unused-images.idx"),
-        output_idx_file: String::from("unused-labels.idx"),
-      },
-      training_strategy: TrainingStrategy::SingleThread,
-      training_steps,
-      report_interval,
-      snapshot_interval,
-    }
-  }
 
   #[test]
   fn training_loop_preserves_hook_order_and_report_interval() {
     let temp_dir: TempDir = TempDir::new("training_loop_hooks");
     let output_prefix: String = temp_dir.path().join("model").display().to_string();
-    let mut handler: RecordingHandler = RecordingHandler::new(test_config(3, 2, 0), output_prefix);
+    let mut handler: RecordingTrainingHandler = RecordingTrainingHandler::new(
+      single_thread_train_config(3, 2, 0),
+      output_prefix,
+    );
 
     run_supervised_training_loop(&mut handler).unwrap();
 
@@ -295,7 +164,10 @@ mod tests {
   fn training_loop_saves_snapshots_at_configured_steps() {
     let temp_dir = TempDir::new("training_loop_snapshots");
     let output_prefix = temp_dir.path().join("model").display().to_string();
-    let mut handler = RecordingHandler::new(test_config(5, 0, 2), output_prefix.clone());
+    let mut handler: RecordingTrainingHandler = RecordingTrainingHandler::new(
+      single_thread_train_config(5, 0, 2),
+      output_prefix.clone(),
+    );
 
     run_supervised_training_loop(&mut handler).unwrap();
 

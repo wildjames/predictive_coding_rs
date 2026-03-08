@@ -84,8 +84,8 @@ Training and evaluation do not depend on a single hardcoded in-memory MNIST path
 
 ### Tasks
 
-- [ ] Define a dataset or sample-provider abstraction that exposes shape metadata and sample access.
-- [ ] Keep the current MNIST loader as one implementation of that abstraction.
+- [x] Define a dataset or sample-provider abstraction that exposes shape metadata and sample access.
+- [x] Keep the current MNIST loader as one implementation of that abstraction.
 - [ ] Decide whether batching should operate on sampled records, iterators, or owned matrices.
 - [ ] Add support for distinct training and evaluation dataset configuration instead of hardcoded evaluation paths.
 - [ ] Ensure evaluation can reuse config-driven dataset loading rather than loading MNIST directly.
