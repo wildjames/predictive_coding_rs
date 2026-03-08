@@ -35,12 +35,11 @@ pub fn validate_model_and_dataset_shapes(
   }
 
   let layer_sizes: Vec<usize> = model.get_layer_sizes();
-  let Some(model_input_size) = layer_sizes.first().copied() else {
+  if layer_sizes.is_empty() {
     return Err(PredictiveCodingError::validation("Model has no layers"));
-  };
-  let Some(model_output_size) = layer_sizes.last().copied() else {
-    return Err(PredictiveCodingError::validation("Model has no layers"));
-  };
+  }
+  let model_input_size = layer_sizes[0];
+  let model_output_size = *layer_sizes.last().unwrap();
 
   if data.get_input_size() != model_input_size {
     return Err(PredictiveCodingError::validation(format!(
@@ -136,12 +135,11 @@ mod tests {
 
     let result = validate_model_and_dataset_shapes(&model, dataset.as_ref());
 
-    match result {
-      Err(PredictiveCodingError::Validation { message }) => {
-        assert_eq!(message, "Model input size 4 does not match dataset input size 3");
-      }
-      other => panic!("expected validation error, got {other:?}"),
-    }
+    assert!(matches!(
+      result,
+      Err(PredictiveCodingError::Validation { message })
+        if message == "Model input size 4 does not match dataset input size 3"
+    ));
   }
 
   #[test]
@@ -151,12 +149,11 @@ mod tests {
 
     let result = validate_model_and_dataset_shapes(&model, dataset.as_ref());
 
-    match result {
-      Err(PredictiveCodingError::Validation { message }) => {
-        assert_eq!(message, "Model output size 10 does not match dataset output size 9");
-      }
-      other => panic!("expected validation error, got {other:?}"),
-    }
+    assert!(matches!(
+      result,
+      Err(PredictiveCodingError::Validation { message })
+        if message == "Model output size 10 does not match dataset output size 9"
+    ));
   }
 
   #[test]
@@ -175,11 +172,32 @@ mod tests {
 
     let result = validate_training_config(&config);
 
-    match result {
-      Err(PredictiveCodingError::Validation { message }) => {
-        assert_eq!(message, "Mini-batch training requires batch_size > 0");
-      }
-      other => panic!("expected validation error, got {other:?}"),
-    }
+    assert!(matches!(
+      result,
+      Err(PredictiveCodingError::Validation { message })
+        if message == "Mini-batch training requires batch_size > 0"
+    ));
+  }
+
+  #[test]
+  fn validate_training_config_accepts_supported_strategies() {
+    let single_thread = TrainConfig {
+      model_source: ModelSource::Config(String::from("unused.json")),
+      dataset: DataSetSource::MNIST {
+        input_idx_file: String::from("unused-images.idx"),
+        output_idx_file: String::from("unused-labels.idx"),
+      },
+      training_strategy: TrainingStrategy::SingleThread,
+      training_steps: 1,
+      report_interval: 0,
+      snapshot_interval: 0,
+    };
+    let minibatch = TrainConfig {
+      training_strategy: TrainingStrategy::MiniBatch { batch_size: 2 },
+      ..single_thread.clone()
+    };
+
+    assert!(validate_training_config(&single_thread).is_ok());
+    assert!(validate_training_config(&minibatch).is_ok());
   }
 }

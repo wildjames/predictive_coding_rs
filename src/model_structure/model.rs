@@ -399,9 +399,9 @@ impl PredictiveCodingModel {
 
     // the update of a node value depends on the errors of the layer below it.
     let num_layers: usize = self.layers.len();
-    for i in 0..num_layers - 1 { // in rust, the range is exclusive of the upper bound
-      let (lower, upper) = self.layers.split_at_mut(i + 1);
-      let lower_layer: &Layer = &lower[i];
+    for i in 1..num_layers { // Skip the first layer. The range is exclusive of the upper bound
+      let (lower, upper) = self.layers.split_at_mut(i);
+      let lower_layer: &Layer = &lower[i-1];
       let upper_layer: &mut Layer = &mut upper[0];
 
       // The last layer is handled differently.
@@ -455,4 +455,72 @@ impl PredictiveCodingModel {
     }
   }
 
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use ndarray::array;
+
+  #[test]
+  fn layer_construction_uses_provided_values_and_default_xavier_limit() {
+    let provided_values = array![0.25, 0.75];
+    let layer = Layer::new(
+      2,
+      None,
+      ActivationFunction::Relu,
+      Some(provided_values.clone()),
+      Some(true),
+    );
+
+    assert_eq!(layer.values, provided_values);
+    assert_eq!(layer.weights.dim(), (0, 2));
+    assert!(layer.pinned);
+
+    let zero_sized_layer = Layer::new(
+      0,
+      None,
+      ActivationFunction::Relu,
+      Some(Array1::zeros(0)),
+      None,
+    );
+    assert_eq!(zero_sized_layer.xavier_limit, 1.0);
+  }
+
+  #[test]
+  fn randomise_weights_preserves_shape_and_xavier_bound() {
+    let mut layer = Layer::new(3, Some(2), ActivationFunction::Relu, None, None);
+    let xavier_limit = layer.xavier_limit;
+
+    layer.randomise_weights();
+
+    assert_eq!(layer.weights.dim(), (2, 3));
+    assert!(
+      layer.weights.iter().all(|weight| weight.abs() <= xavier_limit),
+      "weights should stay within the Xavier initialisation bounds"
+    );
+  }
+
+  #[test]
+  fn timestep_uses_hidden_layer_error_term_for_non_top_layers() {
+    let mut model = PredictiveCodingModel::new(&PredictiveCodingModelConfig {
+      layer_sizes: vec![1, 1, 1],
+      alpha: 0.05,
+      gamma: 0.5,
+      convergence_threshold: 0.0,
+      convergence_steps: 1,
+      activation_function: ActivationFunction::Relu,
+    });
+
+    model.layers[0].pinned = true;
+    model.layers[0].errors = array![0.0];
+    model.layers[1].values = array![1.0];
+    model.layers[1].errors = array![0.25];
+    model.layers[1].weights = array![[1.0]];
+    model.layers[2].pinned = true;
+
+    model.timestep();
+
+    assert_eq!(model.layers[1].values, array![0.875]);
+  }
 }

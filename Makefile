@@ -19,4 +19,4 @@ bench: build
 	cargo run --release --bin bench
 
 coverage: build
-	cargo llvm-cov --lcov --output-path lcov.info
+	cargo llvm-cov
