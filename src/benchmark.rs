@@ -12,12 +12,12 @@ use predictive_coding::{
   },
   model_structure::{
     model::PredictiveCodingModelConfig,
-    model_utils::save_model_config
+    configuration::save_model_config
   },
   training::{
     setup::setup_training_run_handler,
     train_handler::TrainingHandler,
-    utils::{
+    configuration::{
       TrainConfig,
       save_training_config
     }

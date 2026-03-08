@@ -9,7 +9,7 @@ use crate::{
   },
   training::{
     train_handler::TrainingHandler,
-    utils::TrainConfig,
+    configuration::TrainConfig,
   }
 };
 
@@ -198,15 +198,15 @@ mod tests {
 
   use crate::model_structure::{
     model::PredictiveCodingModelConfig,
-    model_utils::ActivationFunction
+    maths::ActivationFunction
   };
-  use crate::training::utils::TrainingStrategy;
+  use crate::training::configuration::TrainingStrategy;
   use ndarray::{array, Array2};
 
   fn dummy_config() -> TrainConfig {
     TrainConfig {
-      model_source: crate::training::utils::ModelSource::Snapshot(String::from("unused.json")),
-      dataset: crate::training::utils::DataSetSource::MNIST {
+      model_source: crate::training::configuration::ModelSource::Snapshot(String::from("unused.json")),
+      dataset: crate::training::configuration::DataSetSource::MNIST {
         input_idx_file: String::from("unused-images.idx"),
         output_idx_file: String::from("unused-labels.idx"),
       },

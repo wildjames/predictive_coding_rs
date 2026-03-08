@@ -6,6 +6,7 @@ use std::{
   process::ExitStatus,
 };
 
+// Wrap result to that we always return the custom error type
 pub type Result<T> = std::result::Result<T, PredictiveCodingError>;
 
 #[derive(Debug)]

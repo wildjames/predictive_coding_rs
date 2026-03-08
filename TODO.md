@@ -71,10 +71,10 @@ Modules are organized by responsibility instead of accumulating unrelated helper
 
 ### Tasks
 
-- [ ] Split `src/training/utils.rs` into narrower modules such as config, loading, and validation.
-- [ ] Split `src/model_structure/model_utils.rs` into narrower modules such as persistence, math, activation, and sampling.
-- [ ] Keep type definitions close to the code that owns them.
-- [ ] Rename modules away from generic `utils` where the responsibility is now clear.
+- [x] Split `src/training/utils.rs` into narrower modules such as config, loading, and validation.
+- [x] Split `src/model_structure/model_utils.rs` into narrower modules such as persistence, math, activation, and sampling.
+- [x] Keep type definitions close to the code that owns them.
+- [x] Rename modules away from generic `utils` where the responsibility is now clear.
 
 ## Phase 5: Generalize the Data Boundary
 

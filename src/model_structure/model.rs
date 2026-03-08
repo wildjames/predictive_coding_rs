@@ -2,7 +2,7 @@
 //!
 //! Defines a layered model with local prediction errors and weight updates.
 
-use crate::model_structure::model_utils::{ActivationFunction, outer_product};
+use crate::model_structure::maths::{ActivationFunction, outer_product};
 
 use serde::{Deserialize, Serialize};
 use ndarray::{Array1, Array2};
@@ -224,6 +224,7 @@ impl PredictiveCodingModel {
     }
   }
 
+  // Getters for model properties, so I don't have to expose the model fields directly
   pub fn get_config(&self) -> PredictiveCodingModelConfig {
     PredictiveCodingModelConfig {
       layer_sizes: self.layers.iter().map(|l| l.size).collect(),
@@ -235,27 +236,21 @@ impl PredictiveCodingModel {
       activation_function: self.layers.first().unwrap().activation_function,
     }
   }
-
   pub fn get_layers(&self) -> &Vec<Layer> {
     &self.layers
   }
-
   pub fn get_layer(&self, index: usize) -> &Layer {
     &self.layers[index]
   }
-
   pub fn get_layer_sizes(&self) -> Vec<usize> {
     self.layers.iter().map(|l| l.size).collect()
   }
-
   pub fn get_alpha(&self) -> f32 {
     self.alpha
   }
-
   pub fn get_gamma(&self) -> f32 {
     self.gamma
   }
-
   pub fn get_activation_function(&self) -> ActivationFunction {
     self.layers.first().unwrap().activation_function
   }

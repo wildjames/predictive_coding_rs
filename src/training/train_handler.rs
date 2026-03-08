@@ -5,9 +5,12 @@ use crate::{
   error::Result,
   model_structure::{
     model::{PredictiveCodingModel, PredictiveCodingModelConfig},
-    model_utils::{save_model_config, save_model_snapshot}
+    configuration::{save_model_config, save_model_snapshot}
   },
-  training::utils::{TrainConfig, save_training_config}
+  training::configuration::{
+    TrainConfig,
+    save_training_config
+  }
 };
 
 pub trait TrainingHandler {
@@ -115,9 +118,9 @@ mod tests {
   use crate::{
     model_structure::{
       model::PredictiveCodingModelConfig,
-      model_utils::ActivationFunction
+      maths::ActivationFunction
     },
-    training::utils::{
+    training::configuration::{
       DataSetSource,
       ModelSource,
       TrainingStrategy
