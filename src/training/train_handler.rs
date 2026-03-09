@@ -4,9 +4,10 @@ use tracing::info;
 use crate::{
   data_handling::TrainingDataset,
   error::Result,
-  model_structure::{
-    model::{PredictiveCodingModel, PredictiveCodingModelConfig},
-    configuration::{save_model_config, save_model_snapshot}
+  model::{
+    {PredictiveCodingModel, PredictiveCodingModelConfig},
+    save_model_config,
+    save_model_snapshot
   },
   training::configuration::{
     TrainConfig,

@@ -1,5 +1,5 @@
 use crate::{
-  model_structure::model::{
+  model::model_structure::{
     PredictiveCodingModel,
     PredictiveCodingModelConfig
   },
@@ -63,7 +63,7 @@ mod tests {
   use super::*;
   use crate::test_utils::{TempDir, write_file};
 
-  use crate::model_structure::maths::ActivationFunction;
+  use crate::model::maths::ActivationFunction;
 
   use ndarray::array;
 

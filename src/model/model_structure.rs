@@ -2,7 +2,7 @@
 //!
 //! Defines a layered model with local prediction errors and weight updates.
 
-use crate::model_structure::maths::{ActivationFunction, outer_product};
+use crate::model::maths::{ActivationFunction, outer_product};
 
 use serde::{Deserialize, Serialize};
 use ndarray::{Array1, Array2};

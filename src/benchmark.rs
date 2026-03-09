@@ -10,9 +10,9 @@ use predictive_coding::{
     PredictiveCodingError,
     Result
   },
-  model_structure::{
-    model::PredictiveCodingModelConfig,
-    configuration::save_model_config
+  model::{
+    PredictiveCodingModelConfig,
+    save_model_config
   },
   training::{
     setup::setup_training_run_handler,

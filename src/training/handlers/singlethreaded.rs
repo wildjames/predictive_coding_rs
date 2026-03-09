@@ -3,8 +3,8 @@
 use crate::{
   data_handling::TrainingDataset,
   error::Result,
-  model_structure::{
-    model::PredictiveCodingModel,
+  model::{
+    PredictiveCodingModel,
     model_utils::set_rand_input_and_output
   },
   training::{

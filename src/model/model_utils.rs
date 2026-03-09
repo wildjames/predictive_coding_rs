@@ -2,7 +2,7 @@
 
 use crate::{
   data_handling::TrainingDataset,
-  model_structure::model::PredictiveCodingModel
+  model::PredictiveCodingModel
 };
 
 

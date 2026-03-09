@@ -4,12 +4,10 @@ use crate::{
     mnist::load_mnist
   },
   error::{PredictiveCodingError, Result},
-  model_structure::{
-    model::PredictiveCodingModel,
-    configuration::{
-      create_from_config,
-      load_model_snapshot
-    }
+  model::{
+    PredictiveCodingModel,
+    create_from_config,
+    load_model_snapshot
   }
 };
 

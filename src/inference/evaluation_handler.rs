@@ -15,7 +15,7 @@ use crate::{
     InferencePrediction,
     read_label
   },
-  model_structure::model::{
+  model::{
     PredictiveCodingModel,
     PredictiveCodingModelConfig
   },
@@ -282,7 +282,7 @@ mod tests {
 
 	#[test]
 	fn inference_handler_prepares_input_and_reads_output() {
-		let model: crate::model_structure::model::PredictiveCodingModel = tiny_relu_model();
+		let model: crate::model::PredictiveCodingModel = tiny_relu_model();
 		let mut handler = InferenceModelHandler::from_model(model);
 
 		handler.prepare_input(array![1.0, 0.0, 0.5, 0.25]);

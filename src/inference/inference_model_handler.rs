@@ -4,9 +4,9 @@ use ndarray::Array1;
 
 use crate::{
 	error::{PredictiveCodingError, Result},
-	model_structure::{
-		configuration::load_model_snapshot,
-		model::PredictiveCodingModel,
+	model::{
+		load_model_snapshot,
+		PredictiveCodingModel,
 	}
 };
 

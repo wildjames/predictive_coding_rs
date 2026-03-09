@@ -5,10 +5,11 @@ use ndarray::{Array1, Array2, array};
 use predictive_coding::{
   data_handling::TrainingDataset,
   error::Result,
-  model_structure::{
-    configuration::save_model_snapshot,
+  model::{
     maths::ActivationFunction,
-    model::{PredictiveCodingModel, PredictiveCodingModelConfig},
+    PredictiveCodingModel,
+    PredictiveCodingModelConfig,
+    save_model_snapshot
   },
   training::{
     configuration::{

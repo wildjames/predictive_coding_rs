@@ -4,7 +4,7 @@ use crate::{
     PredictiveCodingError,
     Result
   },
-  model_structure::model::PredictiveCodingModel,
+  model::PredictiveCodingModel,
   training::configuration::{
     TrainConfig,
     TrainingStrategy

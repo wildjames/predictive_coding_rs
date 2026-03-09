@@ -1,7 +1,7 @@
 use crate::{
   data_handling::TrainingDataset,
   error::{PredictiveCodingError, Result},
-  model_structure::model::PredictiveCodingModel,
+  model::PredictiveCodingModel,
   training::{
     handlers::{
       minibatch::BatchTrainHandler,
