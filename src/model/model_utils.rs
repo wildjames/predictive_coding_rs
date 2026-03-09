@@ -2,8 +2,8 @@
 
 use crate::{
   data_handling::TrainingDataset,
-  model::PredictiveCodingModel
 };
+use super::PredictiveCodingModel;
 
 
 /// Choose a random index using the rng threadlocal generator, and set the model I/O accordingly.

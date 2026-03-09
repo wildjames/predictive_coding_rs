@@ -1,10 +1,11 @@
 use crate::{
-  model::model_structure::{
-    PredictiveCodingModel,
-    PredictiveCodingModelConfig
-  },
   utils::ensure_parent_dir,
   error::{PredictiveCodingError, Result}
+};
+
+use super::{
+  PredictiveCodingModel,
+  PredictiveCodingModelConfig
 };
 
 
