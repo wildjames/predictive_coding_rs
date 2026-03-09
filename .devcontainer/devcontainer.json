@@ -39,5 +39,7 @@
   "remoteEnv": {
     "LOCAL_WORKSPACE_FOLDER": "${localWorkspaceFolder}"
   },
-  "features": {}
+  "features": {
+    "ghcr.io/prulloac/devcontainer-features/pre-commit:1.0.3": {}
+  }
 }
