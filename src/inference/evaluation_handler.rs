@@ -10,11 +10,6 @@ use tracing::info;
 use crate::{
 	data_handling::TrainingDataset,
   error::{PredictiveCodingError, Result},
-  inference::inference_model_handler::{
-    InferenceModelHandler,
-    InferencePrediction,
-    read_label
-  },
   model::{
     PredictiveCodingModel,
     PredictiveCodingModelConfig
@@ -24,6 +19,12 @@ use crate::{
 		load_training_config,
     validate_model_and_dataset_shapes
   }
+};
+
+use super::{
+	InferenceModelHandler,
+	InferencePrediction,
+	read_label
 };
 
 
@@ -56,10 +57,6 @@ impl PreparedSample {
 
 	pub fn expected_label(&self) -> usize {
 		self.expected_label
-	}
-
-	pub fn input_values(&self) -> &Array1<f32> {
-		&self.input_values
 	}
 
 	pub fn into_input_values(self) -> Array1<f32> {
@@ -265,7 +262,7 @@ mod tests {
 		let sample = PreparedSample::from_dataset(&dataset, 0).unwrap();
 
 		assert_eq!(sample.expected_label(), 1);
-		assert_eq!(sample.input_values(), &array![1.0, 0.0, 0.5, 0.25]);
+		assert_eq!(sample.into_input_values(), array![1.0, 0.0, 0.5, 0.25]);
 	}
 
 	#[test]

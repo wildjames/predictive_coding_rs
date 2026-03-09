@@ -4,7 +4,7 @@ use tracing::info;
 
 use predictive_coding::{
   error::Result,
-  inference::evaluation_handler::{
+  inference::{
     EvaluationArtifacts,
     EvaluationRun
   },
@@ -30,7 +30,7 @@ fn main() -> Result<()> {
 
   let args = EvalArgs::parse();
 
-  let mut evaluation_run: EvaluationRun = EvaluationRun::load(args.model_file, args.training_config)?;
+  let mut evaluation_run = EvaluationRun::load(args.model_file, args.training_config)?;
   let artifacts: EvaluationArtifacts = evaluation_run.evaluate_and_write_results()?;
 
   info!(
