@@ -118,7 +118,7 @@ Current options:
 - `Sigmoid`
 - `Tanh`
 
-Important detail: the current implementation applies the same activation function to every layer. The config does not support choosing different activations per layer.
+The current implementation applies the same activation function to every layer. The config does not support choosing different activations per layer.
 
 The activation is used in two places:
 
