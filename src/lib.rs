@@ -4,7 +4,8 @@
 
 pub mod data_handling;
 pub mod error;
-pub mod model_structure;
+pub mod inference;
+pub mod model;
 pub mod training;
 pub mod utils;
 
