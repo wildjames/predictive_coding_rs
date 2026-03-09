@@ -6,17 +6,17 @@ use crate::{
   model::{
     PredictiveCodingModel,
     model_utils::set_rand_input_and_output
-  },
-  training::{
-    train_handler::TrainingHandler,
-    configuration::TrainConfig,
   }
+};
+
+use super::{
+  TrainingHandler,
+  TrainConfig,
 };
 
 use std::sync::Arc;
 use chrono::TimeDelta;
 use tracing::{debug, info};
-
 
 pub struct SingleThreadTrainHandler {
   config: TrainConfig,

@@ -14,13 +14,14 @@ use predictive_coding::{
   training::{
     configuration::{
       DataSetSource,
-      ModelSource,
-      TrainConfig,
-      TrainingStrategy,
+      ModelSource
     },
-    train_handler::TrainingHandler,
+    TrainConfig,
+    TrainingStrategy,
+    TrainingHandler,
   },
 };
+
 use std::{
   fs,
   path::{Path, PathBuf},

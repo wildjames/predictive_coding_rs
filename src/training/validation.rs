@@ -5,10 +5,11 @@ use crate::{
     Result
   },
   model::PredictiveCodingModel,
-  training::configuration::{
-    TrainConfig,
-    TrainingStrategy
-  }
+};
+
+use super::{
+  TrainConfig,
+  TrainingStrategy
 };
 
 #[cfg(test)]

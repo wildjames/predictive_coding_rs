@@ -1,2 +1,7 @@
-pub mod minibatch;
-pub mod singlethreaded;
+mod minibatch;
+mod singlethreaded;
+
+pub use minibatch::BatchTrainHandler;
+pub use singlethreaded::SingleThreadTrainHandler;
+
+use super::{TrainingHandler, TrainConfig};

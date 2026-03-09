@@ -15,12 +15,10 @@ use predictive_coding::{
     save_model_config
   },
   training::{
-    setup::setup_training_run_handler,
-    train_handler::TrainingHandler,
-    configuration::{
-      TrainConfig,
-      save_training_config
-    }
+    save_training_config,
+    setup_training_run_handler,
+    TrainingHandler,
+    TrainConfig,
   },
   utils::{
     logging,

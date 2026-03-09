@@ -6,10 +6,11 @@ use crate::{
     PredictiveCodingModel,
     model_utils::set_rand_input_and_output
   },
-  training::{
-    train_handler::TrainingHandler,
-    configuration::TrainConfig,
-  }
+};
+
+use super::{
+  TrainingHandler,
+  TrainConfig,
 };
 
 use chrono::TimeDelta;

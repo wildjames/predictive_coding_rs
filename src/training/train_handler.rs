@@ -5,15 +5,18 @@ use crate::{
   data_handling::TrainingDataset,
   error::Result,
   model::{
-    {PredictiveCodingModel, PredictiveCodingModelConfig},
+    PredictiveCodingModel,
+    PredictiveCodingModelConfig,
     save_model_config,
     save_model_snapshot
   },
-  training::configuration::{
-    TrainConfig,
-    save_training_config
-  }
 };
+
+use super::{
+  TrainConfig,
+  save_training_config
+};
+
 
 pub trait TrainingHandler {
   fn get_config(&self) -> &TrainConfig;

@@ -3,11 +3,9 @@
 use predictive_coding::{
   error::Result,
   training::{
-    setup::setup_training_run_handler,
-    train_handler::{
-      TrainingHandler,
-      run_supervised_training_loop
-    }
+    setup_training_run_handler,
+    TrainingHandler,
+    run_supervised_training_loop
   },
   utils::{logging, timestamp}
 };

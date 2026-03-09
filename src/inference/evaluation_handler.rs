@@ -20,11 +20,9 @@ use crate::{
     PredictiveCodingModelConfig
   },
   training::{
-    configuration::{
-      load_dataset,
-      load_training_config
-    },
-    validation::validate_model_and_dataset_shapes
+		load_dataset,
+		load_training_config,
+    validate_model_and_dataset_shapes
   }
 };
 

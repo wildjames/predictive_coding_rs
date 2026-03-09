@@ -2,24 +2,21 @@ use crate::{
   data_handling::TrainingDataset,
   error::{PredictiveCodingError, Result},
   model::PredictiveCodingModel,
-  training::{
-    handlers::{
-      minibatch::BatchTrainHandler,
-      singlethreaded::SingleThreadTrainHandler
-    },
-    train_handler::TrainingHandler,
-    configuration::{
-      TrainConfig,
-      TrainingStrategy,
-      load_dataset,
-      load_model,
-      load_training_config
-    },
-    validation::{
-      validate_model_and_dataset_shapes,
-      validate_training_config
-    }
-  }
+};
+
+use super::{
+  handlers::{
+    BatchTrainHandler,
+    SingleThreadTrainHandler
+  },
+  TrainingHandler,
+  TrainConfig,
+  TrainingStrategy,
+  load_dataset,
+  load_model,
+  load_training_config,
+  validate_model_and_dataset_shapes,
+  validate_training_config
 };
 
 use std::sync::Arc;
