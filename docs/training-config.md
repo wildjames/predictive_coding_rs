@@ -20,10 +20,16 @@ The config is read by `load_training_config`, which deserializes the JSON direct
   "model_source": {
     "Config": "data/model_config.json"
   },
-  "dataset": {
+  "training_dataset": {
     "IdxFormat": {
       "input_idx_file": "data/mnist/train-images-idx3-ubyte",
       "output_idx_file": "data/mnist/train-labels-idx1-ubyte"
+    }
+  },
+  "evaluation_dataset": {
+    "IdxFormat": {
+      "input_idx_file": "data/mnist/t10k-images-idx3-ubyte",
+      "output_idx_file": "data/mnist/t10k-labels-idx1-ubyte"
     }
   },
   "training_strategy": {
@@ -39,16 +45,16 @@ The config is read by `load_training_config`, which deserializes the JSON direct
 
 ## Top-Level Schema
 
-All top-level fields are required:
+Most top-level fields are required:
 
 - `model_source`
-- `dataset`
+- `training_dataset`
 - `training_strategy`
 - `training_steps`
 - `report_interval`
 - `snapshot_interval`
 
-Although the Rust field comments mention defaults for `report_interval` and `snapshot_interval`, no Serde defaults are implemented. Omitting either field will fail deserialization.
+The `evaluation_dataset` is optional at training time, but required for evaluation sessions. It can be added or updated later, if needed, though I recommend cloning the model output directory so you don't overwrite the history of the model.
 
 ## Enum Encoding
 
@@ -57,7 +63,7 @@ Although the Rust field comments mention defaults for `report_interval` and `sna
 That means:
 
 - `model_source` is an object with a single variant key such as `{ "Config": "..." }`.
-- `dataset` is an object with a single variant key such as `{ "IdxFormat": { ... } }`.
+- `training_dataset` is an object with a single variant key such as `{ "IdxFormat": { ... } }`.
 - `training_strategy` is either:
   - the string `"SingleThread"` for the unit variant (no strategy-specific parameters), or
   - an object such as `{ "MiniBatch": { "batch_size": 16 } }` for the struct variant, which does have strategy-specific parametes.
@@ -88,14 +94,14 @@ See [Model configuration](model-config.md) for the schema of that file.
 
 Loads a previously saved model snapshot via `load_model_snapshot`. This is the mechanism for resuming training from an earlier run.
 
-### `dataset`
+### `training_dataset`
 
-Controls which dataset loader is used.
+Controls which dataset loader is used for training data.
 
-The only supported dataset source right now is MNIST:
+The only supported dataset source right now is IDX format, e.g. MNIST:
 
 ```json
-"dataset": {
+"training_dataset": {
   "IdxFormat": {
     "input_idx_file": "data/mnist/train-images-idx3-ubyte",
     "output_idx_file": "data/mnist/train-labels-idx1-ubyte"
@@ -103,9 +109,20 @@ The only supported dataset source right now is MNIST:
 }
 ```
 
-Note for MNIST:
-- Images are normalized to the range `0..1` when loaded.
-- Labels are converted to one-hot vectors with width `10`.
+### `evaluation_dataset`
+
+Controls which dataset loader is used for evaluating a trained model.
+
+The only supported dataset source right now is IDX format, e.g. MNIST:
+
+```json
+"evaluation_dataset": {
+  "IdxFormat": {
+    "input_idx_file": "data/mnist/t10k-images-idx3-ubyte",
+    "output_idx_file": "data/mnist/t10k-labels-idx1-ubyte"
+  }
+}
+```
 
 ### `training_strategy`
 
