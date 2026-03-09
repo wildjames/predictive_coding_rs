@@ -1,5 +1,5 @@
 use crate::{
-  data_handling::data_handler::TrainingDataset,
+  data_handling::TrainingDataset,
   error::{PredictiveCodingError, Result},
   model_structure::model::PredictiveCodingModel,
   training::{

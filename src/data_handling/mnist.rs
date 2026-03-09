@@ -1,17 +1,16 @@
 //! Dataset loading and preprocessing utilities.
 
+use super::TrainingDataset;
+
 use crate::{
-  data_handling::data_handler::TrainingDataset,
   error::{PredictiveCodingError, Result},
 };
 
-use tracing::{debug, info};
-
+use ndarray::{Array1, Array2, s};
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::Path;
-
-use ndarray::{Array1, Array2, s};
+use tracing::{debug, info};
 
 
 // Homebrew IDX reader, since it's a simple format and I don't want to add a dependency.

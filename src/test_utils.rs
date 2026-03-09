@@ -3,7 +3,7 @@
 use chrono::Duration;
 use ndarray::{Array1, Array2, array};
 use predictive_coding::{
-  data_handling::data_handler,
+  data_handling::TrainingDataset,
   error::Result,
   model_structure::{
     configuration::save_model_snapshot,
@@ -83,7 +83,7 @@ impl DummyTrainingDataset {
   }
 }
 
-impl data_handler::TrainingDataset for DummyTrainingDataset {
+impl TrainingDataset for DummyTrainingDataset {
   fn get_dataset_size(&self) -> usize {self.inputs.nrows()}
   fn get_input_size(&self) -> usize {self.inputs.ncols()}
   fn get_output_size(&self) -> usize {self.labels.ncols()}
@@ -141,7 +141,7 @@ pub(crate) fn single_thread_train_config(
 pub(crate) struct RecordingTrainingHandler {
   config: TrainConfig,
   model: PredictiveCodingModel,
-  data: Arc<dyn data_handler::TrainingDataset>,
+  data: Arc<dyn TrainingDataset>,
   file_output_prefix: String,
   pub(crate) steps: Vec<u32>,
   pub(crate) events: Vec<String>,
@@ -149,7 +149,7 @@ pub(crate) struct RecordingTrainingHandler {
 
 impl RecordingTrainingHandler {
   pub(crate) fn new(config: TrainConfig, output_prefix: String) -> Self {
-    let data: Arc<dyn data_handler::TrainingDataset> = Arc::new(DummyTrainingDataset::from_arrays(
+    let data: Arc<dyn TrainingDataset> = Arc::new(DummyTrainingDataset::from_arrays(
       array![[1.0, 0.0, 0.5, 0.25]],
       array![[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]],
     ));
@@ -174,7 +174,7 @@ impl TrainingHandler for RecordingTrainingHandler {
     &mut self.model
   }
 
-  fn get_data(&self) -> &dyn data_handler::TrainingDataset {
+  fn get_data(&self) -> &dyn TrainingDataset {
     self.data.as_ref()
   }
 

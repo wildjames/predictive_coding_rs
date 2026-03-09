@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use crate::{
-	data_handling::data_handler::TrainingDataset,
+	data_handling::TrainingDataset,
   error::{PredictiveCodingError, Result},
   inference::inference_model_handler::{
     InferenceModelHandler,

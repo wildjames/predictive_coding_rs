@@ -1,7 +1,7 @@
 //! Math utilities for predictive coding models.
 
 use crate::{
-  data_handling::data_handler::TrainingDataset,
+  data_handling::TrainingDataset,
   model_structure::model::PredictiveCodingModel
 };
 

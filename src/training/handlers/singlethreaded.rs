@@ -1,7 +1,7 @@
 //! Training orchestration for predictive coding models.
 
 use crate::{
-  data_handling::data_handler,
+  data_handling::TrainingDataset,
   error::Result,
   model_structure::{
     model::PredictiveCodingModel,
@@ -21,7 +21,7 @@ use tracing::{debug, info};
 pub struct SingleThreadTrainHandler {
   config: TrainConfig,
   model: PredictiveCodingModel,
-  data: Arc<dyn data_handler::TrainingDataset>,
+  data: Arc<dyn TrainingDataset>,
   file_output_prefix: String
 }
 
@@ -29,7 +29,7 @@ impl SingleThreadTrainHandler {
   pub fn new(
     config: TrainConfig,
     model: PredictiveCodingModel,
-    data: Arc<dyn data_handler::TrainingDataset>,
+    data: Arc<dyn TrainingDataset>,
     file_output_prefix: String
   ) -> Self {
     SingleThreadTrainHandler {
@@ -48,7 +48,7 @@ impl TrainingHandler for SingleThreadTrainHandler {
   fn get_model(&mut self) -> &mut PredictiveCodingModel {
     &mut self.model
   }
-  fn get_data(&self) -> &dyn data_handler::TrainingDataset {
+  fn get_data(&self) -> &dyn TrainingDataset {
     self.data.as_ref()
   }
   fn get_file_output_prefix(&self) -> &String {

@@ -1,6 +1,6 @@
 
 use crate::{
-  data_handling::data_handler,
+  data_handling::TrainingDataset,
   error::Result,
   model_structure::{
     model::PredictiveCodingModel,
@@ -21,7 +21,7 @@ use tracing::{info, debug};
 pub struct BatchTrainHandler {
   config: TrainConfig,
   model: PredictiveCodingModel,
-  data: Arc<dyn data_handler::TrainingDataset>,
+  data: Arc<dyn TrainingDataset>,
   file_output_prefix: String,
   batch_size: u32
 }
@@ -30,7 +30,7 @@ impl BatchTrainHandler {
   pub fn new(
     config: TrainConfig,
     model: PredictiveCodingModel,
-    data: Arc<dyn data_handler::TrainingDataset>,
+    data: Arc<dyn TrainingDataset>,
     file_output_prefix: String,
     batch_size: u32
   ) -> Self {
@@ -52,7 +52,7 @@ impl TrainingHandler for BatchTrainHandler {
   fn get_model(&mut self) -> &mut PredictiveCodingModel {
     &mut self.model
   }
-  fn get_data(&self) -> &dyn data_handler::TrainingDataset {
+  fn get_data(&self) -> &dyn TrainingDataset {
     self.data.as_ref()
   }
   fn get_file_output_prefix(&self) -> &String {
@@ -176,7 +176,7 @@ mod tests {
     }
   }
 
-  fn tiny_dataset() -> Arc<dyn data_handler::TrainingDataset> {
+  fn tiny_dataset() -> Arc<dyn TrainingDataset> {
     let mut labels: Array2<f32> = Array2::zeros((1, 10));
     labels.row_mut(0).assign(&array![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
 
@@ -199,7 +199,7 @@ mod tests {
   #[test]
   fn minibatch_aggregation_matches_single_sample_update_on_deterministic_fixture() {
     let initial_model: PredictiveCodingModel = tiny_relu_model();
-    let dataset: Arc<dyn data_handler::TrainingDataset> = tiny_dataset();
+    let dataset: Arc<dyn TrainingDataset> = tiny_dataset();
     let config: TrainConfig = dummy_config();
 
     let mut single_handler: SingleThreadTrainHandler = SingleThreadTrainHandler::new(

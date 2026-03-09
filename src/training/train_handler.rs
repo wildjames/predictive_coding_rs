@@ -2,7 +2,7 @@ use chrono::{TimeDelta, Utc};
 use tracing::info;
 
 use crate::{
-  data_handling::data_handler,
+  data_handling::TrainingDataset,
   error::Result,
   model_structure::{
     model::{PredictiveCodingModel, PredictiveCodingModelConfig},
@@ -17,7 +17,7 @@ use crate::{
 pub trait TrainingHandler {
   fn get_config(&self) -> &TrainConfig;
   fn get_model(&mut self) -> &mut PredictiveCodingModel;
-  fn get_data(&self) -> &dyn data_handler::TrainingDataset;
+  fn get_data(&self) -> &dyn TrainingDataset;
   fn get_file_output_prefix(&self) -> &String;
 
   fn pre_training_hook(&mut self) -> Result<()> {

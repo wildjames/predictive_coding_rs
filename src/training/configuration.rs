@@ -1,6 +1,6 @@
 use crate::{
   data_handling::{
-    data_handler::TrainingDataset,
+    TrainingDataset,
     mnist::load_mnist
   },
   error::{PredictiveCodingError, Result},
