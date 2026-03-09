@@ -1,132 +1,118 @@
 use ndarray::{Array2, ArrayBase, Data, Dimension};
-use serde::{Serialize, Deserialize};
-
+use serde::{Deserialize, Serialize};
 
 /// Activation function identifiers for serialization-friendly models.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ActivationFunction {
-  Relu,
-  Sigmoid,
-  Tanh
+    Relu,
+    Sigmoid,
+    Tanh,
 }
 
 impl ActivationFunction {
-  /// Apply the activation function.
-  pub fn apply(&self, x: f32) -> f32 {
-    match self {
-      ActivationFunction::Relu => relu(x),
-      ActivationFunction::Sigmoid => sigmoid(x),
-      ActivationFunction::Tanh => tanh(x),
+    /// Apply the activation function.
+    pub fn apply(&self, x: f32) -> f32 {
+        match self {
+            ActivationFunction::Relu => relu(x),
+            ActivationFunction::Sigmoid => sigmoid(x),
+            ActivationFunction::Tanh => tanh(x),
+        }
     }
-  }
 
-  /// Apply the activation function derivative.
-  pub fn derivative(&self, x: f32) -> f32 {
-    match self {
-      ActivationFunction::Relu => relu_derivitive(x),
-      ActivationFunction::Sigmoid => sigmoid_derivitive(x),
-      ActivationFunction::Tanh => tanh_derivative(x),
+    /// Apply the activation function derivative.
+    pub fn derivative(&self, x: f32) -> f32 {
+        match self {
+            ActivationFunction::Relu => relu_derivitive(x),
+            ActivationFunction::Sigmoid => sigmoid_derivitive(x),
+            ActivationFunction::Tanh => tanh_derivative(x),
+        }
     }
-  }
 }
-
 
 /// Compute the outer product of two arbitrary-dimensional arrays flattened
 /// in iteration order.
 ///
 /// Returns a matrix with shape `(a.len(), b.len())` where each element is
 /// `a[i] * b[j]`.
-pub fn outer_product<SA, DA, SB, DB>(
-  a: &ArrayBase<SA, DA>,
-  b: &ArrayBase<SB, DB>
-) -> Array2<f32>
+pub fn outer_product<SA, DA, SB, DB>(a: &ArrayBase<SA, DA>, b: &ArrayBase<SB, DB>) -> Array2<f32>
 where
-  SA: Data<Elem = f32>,
-  SB: Data<Elem = f32>,
-  DA: Dimension,
-  DB: Dimension,
+    SA: Data<Elem = f32>,
+    SB: Data<Elem = f32>,
+    DA: Dimension,
+    DB: Dimension,
 {
-  let a_values: Vec<f32> = a.iter().copied().collect();
-  let b_values: Vec<f32> = b.iter().copied().collect();
-  let rows = a_values.len();
-  let cols = b_values.len();
+    let a_values: Vec<f32> = a.iter().copied().collect();
+    let b_values: Vec<f32> = b.iter().copied().collect();
+    let rows = a_values.len();
+    let cols = b_values.len();
 
-  Array2::from_shape_fn((rows, cols), |(i, j)| a_values[i] * b_values[j])
+    Array2::from_shape_fn((rows, cols), |(i, j)| a_values[i] * b_values[j])
 }
 
 /// Apply the ReLU activation function.
 pub fn relu(x: f32) -> f32 {
-  if x > 0.0 {
-    x
-  } else {
-    0.0
-  }
+    if x > 0.0 { x } else { 0.0 }
 }
 
 pub fn relu_derivitive(x: f32) -> f32 {
-  if x > 0.0 {
-    1.0
-  } else {
-    0.0
-  }
+    if x > 0.0 { 1.0 } else { 0.0 }
 }
 
 /// Apply the sigmoid function
-pub fn sigmoid(x:f32) -> f32 {
-  1.0 / (1.0 + (-x).exp())
+pub fn sigmoid(x: f32) -> f32 {
+    1.0 / (1.0 + (-x).exp())
 }
 
 pub fn sigmoid_derivitive(x: f32) -> f32 {
-  (-x).exp() / (1.0 + (-x).exp()).powi(2)
+    (-x).exp() / (1.0 + (-x).exp()).powi(2)
 }
 
 // Apply tanh
 pub fn tanh(x: f32) -> f32 {
-  x.tanh()
+    x.tanh()
 }
 
 pub fn tanh_derivative(x: f32) -> f32 {
-  4.0 / ( (-x).exp() + x.exp()).powi(2)
+    4.0 / ((-x).exp() + x.exp()).powi(2)
 }
-
 
 #[cfg(test)]
 mod tests {
-  use super::*;
+    use super::*;
 
-  fn assert_within_tol(expected: f32, actual: f32, tol: f32) {
-    assert!(
-      (expected - actual).abs() < tol,
-      "Expected {}, got {}, which is outside the tolerance of {}",
-      expected,
-      actual,
-      tol
-    );
-  }
+    fn assert_within_tol(expected: f32, actual: f32, tol: f32) {
+        assert!(
+            (expected - actual).abs() < tol,
+            "Expected {}, got {}, which is outside the tolerance of {}",
+            expected,
+            actual,
+            tol
+        );
+    }
 
-  #[test]
-  fn test_sigmoid() {
-    let x = 0.5;
-    let expected = 0.622459;
-    let actual = sigmoid(x);
-    assert_within_tol(expected, actual, 1e-6);
+    #[test]
+    fn test_sigmoid() {
+        let x = 0.5;
+        let expected = 0.622459;
+        let actual = sigmoid(x);
+        assert_within_tol(expected, actual, 1e-6);
 
-    let x = -0.5;
-    let expected = 0.377541;
-    let actual = sigmoid(x);
-    assert_within_tol(expected, actual, 1e-6);
-  }
+        let x = -0.5;
+        let expected = 0.377541;
+        let actual = sigmoid(x);
+        assert_within_tol(expected, actual, 1e-6);
+    }
 
-  #[test]
-  fn test_sigmoid_derivative() {
-    let x = 0.5;
-    let expected = 0.235004;
-    let actual = sigmoid_derivitive(x);
-    assert_within_tol(expected, actual, 1e-6);
+    #[test]
+    fn test_sigmoid_derivative() {
+        let x = 0.5;
+        let expected = 0.235004;
+        let actual = sigmoid_derivitive(x);
+        assert_within_tol(expected, actual, 1e-6);
 
-    let x = -0.5;
-    let expected = 0.235004;
-    let actual = sigmoid_derivitive(x);
-    assert_within_tol(expected, actual, 1e-6);
-  }
+        let x = -0.5;
+        let expected = 0.235004;
+        let actual = sigmoid_derivitive(x);
+        assert_within_tol(expected, actual, 1e-6);
+    }
 }
