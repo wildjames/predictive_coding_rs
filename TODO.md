@@ -102,9 +102,9 @@ Inference and evaluation live behind shared library code instead of ad hoc logic
 
 ### Tasks
 
-- [ ] Move shared evaluation logic into a real inference module.
-- [ ] Define a reusable API for: load model, prepare inputs, converge, read outputs, compute metrics.
-- [ ] Keep the binary thin: argument parsing, setup, and output formatting only.
+- [x] Move shared evaluation logic into a real inference module.
+- [x] Define a reusable API for: load model, prepare inputs, converge, read outputs, compute metrics.
+- [x] Keep the binary thin: argument parsing, setup, and output formatting only.
 
 ### Notes
 

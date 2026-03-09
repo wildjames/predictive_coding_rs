@@ -155,7 +155,7 @@ mod tests {
     test_utils::{DummyTrainingDataset, tiny_relu_model},
   };
   use crate::training::configuration::{TrainingStrategy, DataSetSource, ModelSource};
-  use crate::training::cpu::singlethreaded::SingleThreadTrainHandler;
+  use crate::training::handlers::singlethreaded::SingleThreadTrainHandler;
   use ndarray::{array, Array2};
 
   fn dummy_config() -> TrainConfig {

@@ -1,4 +1,4 @@
-pub mod cpu;
+pub mod handlers;
 pub mod train_handler;
 pub mod setup;
 pub mod configuration;

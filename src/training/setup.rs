@@ -3,7 +3,7 @@ use crate::{
   error::{PredictiveCodingError, Result},
   model_structure::model::PredictiveCodingModel,
   training::{
-    cpu::{
+    handlers::{
       minibatch::BatchTrainHandler,
       singlethreaded::SingleThreadTrainHandler
     },
