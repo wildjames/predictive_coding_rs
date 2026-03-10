@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [[bin]]
+name = "gpu_test"
+path = "src/gpu_playground/intel.rs"
+
+[[bin]]
 name = "bench"
 path = "src/benchmark.rs"
 
@@ -14,6 +18,10 @@ path = "src/train.rs"
 [[bin]]
 name = "eval"
 path = "src/evaluate.rs"
+
+[features]
+default = ["gpu"]
+gpu = ["dep:wgpu", "dep:tokio", "dep:bytemuck"]
 
 [dependencies]
 chrono = "0.4.44"
@@ -26,3 +34,6 @@ serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
 tracing = "0.1.44"
 tracing-subscriber = "0.3.22"
+bytemuck = { version = "1.25.0", optional = true }
+tokio = { version = "1.50.0", optional = true, features = ["full"] }
+wgpu = { version = "28.0.0", optional = true }
