@@ -20,6 +20,5 @@ fn main(
         return;
     }
 
-    // a simple copy operation
-    output[global_invocation_id.x] = input[global_invocation_id.x];
+    output[global_invocation_id.x] = input[global_invocation_id.x] * input[global_invocation_id.x];
 }
