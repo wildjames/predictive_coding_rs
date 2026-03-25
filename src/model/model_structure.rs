@@ -2,10 +2,14 @@
 //!
 //! Defines a layered model with local prediction errors and weight updates.
 
-use super::maths::{ActivationFunction, outer_product};
+use super::{
+    maths::ActivationFunction,
+    snapshot::{LayerSnapshot, ModelSnapshot},
+};
+use crate::error::{PredictiveCodingError, Result};
 
 use ndarray::{Array1, Array2};
-use rand::RngExt;
+use rand::{RngExt, rngs::ThreadRng};
 use serde::{Deserialize, Serialize};
 
 /// A single predictive coding layer with values, predictions, errors, and weights.
@@ -19,7 +23,7 @@ pub struct Layer {
     pub pinned: bool, // If a layer is pinned, its values are not updated during time evolution (e.g. input layers in unsupervised learning, or input and output layers in supervised learning)
     pub activation_function: ActivationFunction,
     pub size: usize, // The number of nodes in this layer, for easy reference. Should be the same as values.len(), predictions.len(), and /errors.len()
-    xavier_limit: f32,
+    pub xavier_limit: f32,
 }
 
 impl Layer {
@@ -28,7 +32,7 @@ impl Layer {
     /// If values are not given, they're set to random vlaues between 0 and 1
     /// Weights are randomly initialised, and predictions and errors are initialised to 0.0
     /// Takes ownership of the given values, if they are given, so that we can updated them in place later.
-    fn new(
+    pub fn new(
         size: usize,
         lower_size: Option<usize>,
         activation_function: ActivationFunction,
@@ -85,116 +89,25 @@ impl Layer {
     }
 
     /// Replace the layer values and pin them to avoid updates during inference.
-    fn pin_values(&mut self, values: Array1<f32>) {
+    pub fn pin_values(&mut self, values: Array1<f32>) {
         self.values = values;
         self.pinned = true;
     }
 
     /// Unpin the layer values to allow updates during inference.
-    fn unpin_values(&mut self) {
+    pub fn unpin_values(&mut self) {
         self.pinned = false;
-    }
-
-    /// Update the predictions for this layer based on the values of the layer above it.
-    fn compute_predictions(&mut self, upper_layer: &Layer) {
-        // Note that the prediction computation should *never* be run for an output layer, but making sure of this is the responsibility of the model, not the layer.
-        // Besides, since an output layer has no upper layer to pass in, this function would not be callable
-
-        // u^l = phi(W^{l+1} * x^{l+1})
-        // Preactivation first, then apply nonlinearity
-        let preactivation: Array1<f32> = upper_layer.weights.dot(&upper_layer.values);
-        self.predictions = preactivation.mapv(|a| upper_layer.activation_function.apply(a));
-    }
-
-    /// Update the errors for this layer based on the predictions and values of this layer.
-    fn compute_errors(&mut self) {
-        self.errors = &self.values - &self.predictions;
-    }
-
-    /// Sum the signed error values for all nodes in this layer.
-    fn read_total_error(&self) -> f32 {
-        self.errors.iter().sum()
-    }
-
-    /// Sum the squared error values for all nodes in this layer.
-    fn read_total_energy(&self) -> f32 {
-        // E = 1/2 * sum(err^2)
-        self.errors.mapv(|x| x.powi(2)).iter().sum()
-    }
-
-    /// Compute the change in node values under a single timestep of PC.
-    /// Returns the summed absolute change in node values across this layer.
-    /// For the input layer, there is no lower layer and None should be passed in instead.
-    fn values_timestep(
-        &mut self,
-        is_top_level: bool,
-        gamma: f32,
-        lower_layer: Option<&Layer>,
-    ) -> f32 {
-        if self.pinned {
-            return 0.0;
-        }
-
-        let rhs: Array1<f32> = if let Some(lower_layer) = lower_layer {
-            // RHS: W^{l,T} * (phi'(a^{l-1}) (hammard) e^{l-1})
-            // where a^{l-1} = W^l * x^l is the preactivation for the layer below (see 2506.06332)
-
-            // a^{l-1} = W^l * x^l
-            let preactivation: Array1<f32> = self.weights.dot(&self.values);
-
-            // phi'(a^{l-1})
-            let activation_function_eval_derivitive: Array1<f32> =
-                preactivation.mapv(|a| self.activation_function.derivative(a));
-
-            // phi'(a^{l-1}) (hammard) e^{l-1}
-            let gain_modulated_errors: Array1<f32> =
-                activation_function_eval_derivitive * &lower_layer.errors;
-
-            // W^{l,T} * (phi'(a^{l-1}) (hammard) e^{l-1})
-            self.weights.t().dot(&gain_modulated_errors)
-        } else {
-            Array1::zeros(self.values.len())
-        };
-
-        // Note that in the output layer, errors are always 0 so the first term of the parentheses is ignored.
-        let value_changes: Array1<f32> = if is_top_level {
-            gamma * rhs
-        } else {
-            gamma * (-&self.errors + rhs)
-        };
-
-        // Update my values and sum the changes to return
-        self.values += &value_changes;
-        value_changes.mapv(|x| x.abs()).sum()
-    }
-
-    fn compute_weight_updates(&mut self, alpha: f32, lower_layer: &Layer) -> Array2<f32> {
-        // W^{l+1} += alpha * (phi'(a^l) (hammard) e^l) * x^{l+1,T}
-        // where a^l = W^{l+1} * x^{l+1} is the preactivation for the layer below
-        let preactivation: Array1<f32> = self.weights.dot(&self.values);
-        let activation_function_result: Array1<f32> =
-            preactivation.mapv(|a| self.activation_function.derivative(a));
-        let gain_modulated_errors: Array1<f32> = &activation_function_result * &lower_layer.errors;
-
-        // outer product yields (lower_size, upper_size)
-        alpha * outer_product(&gain_modulated_errors, &self.values)
-    }
-
-    /// Update prediction weights after convergence based on lower-layer errors.
-    fn update_weights(&mut self, alpha: f32, lower_layer: &Layer) {
-        let weight_changes: Array2<f32> = self.compute_weight_updates(alpha, lower_layer);
-        self.weights += &weight_changes;
     }
 }
 
 /// A multi-layer predictive coding model with value and weight updates.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PredictiveCodingModel {
-    layers: Vec<Layer>,
-    alpha: f32, // synaptic learning rate
-    gamma: f32, // neural learning rate
-    convergence_threshold: f32,
-    convergence_steps: u32,
+    pub layers: Vec<Layer>,
+    pub alpha: f32, // synaptic learning rate
+    pub gamma: f32, // neural learning rate
+    pub convergence_threshold: f32,
+    pub convergence_steps: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -252,6 +165,111 @@ impl PredictiveCodingModel {
             activation_function: self.layers.first().unwrap().activation_function,
         }
     }
+
+    pub fn from_snapshot(snapshot: &ModelSnapshot) -> Result<Self> {
+        if snapshot.layers.len() != snapshot.config.layer_sizes.len() {
+            return Err(PredictiveCodingError::validation(format!(
+                "snapshot contains {} layers but config declares {}",
+                snapshot.layers.len(),
+                snapshot.config.layer_sizes.len()
+            )));
+        }
+
+        let mut layers: Vec<Layer> = Vec::with_capacity(snapshot.layers.len());
+        for (index, layer_snapshot) in snapshot.layers.iter().enumerate() {
+            let expected_size: usize = snapshot.config.layer_sizes[index];
+            if layer_snapshot.size != expected_size {
+                return Err(PredictiveCodingError::validation(format!(
+                    "snapshot layer {} has size {} but config declares {}",
+                    index, layer_snapshot.size, expected_size
+                )));
+            }
+
+            if layer_snapshot.values.len() != layer_snapshot.size
+                || layer_snapshot.predictions.len() != layer_snapshot.size
+                || layer_snapshot.errors.len() != layer_snapshot.size
+            {
+                return Err(PredictiveCodingError::validation(format!(
+                    "snapshot layer {} has inconsistent vector lengths for declared size {}",
+                    index, layer_snapshot.size
+                )));
+            }
+
+            let expected_weight_shape: (usize, usize) = if index == 0 {
+                (0, layer_snapshot.size)
+            } else {
+                (snapshot.config.layer_sizes[index - 1], layer_snapshot.size)
+            };
+            if (layer_snapshot.weight_rows, layer_snapshot.weight_cols) != expected_weight_shape {
+                return Err(PredictiveCodingError::validation(format!(
+                    "snapshot layer {} has weight shape {:?} but expected {:?}",
+                    index,
+                    (layer_snapshot.weight_rows, layer_snapshot.weight_cols),
+                    expected_weight_shape
+                )));
+            }
+
+            let weights: Array2<f32> = Array2::from_shape_vec(
+                (layer_snapshot.weight_rows, layer_snapshot.weight_cols),
+                layer_snapshot.weights.clone(),
+            )
+            .map_err(|_| {
+                PredictiveCodingError::validation(format!(
+                    "snapshot layer {} weight payload has {} values but expected {}",
+                    index,
+                    layer_snapshot.weights.len(),
+                    layer_snapshot.weight_rows * layer_snapshot.weight_cols
+                ))
+            })?;
+
+            let xavier_limit: f32 = if expected_weight_shape.0 + expected_weight_shape.1 > 0 {
+                (6.0_f32 / (expected_weight_shape.0 + expected_weight_shape.1) as f32).sqrt()
+            } else {
+                1.0
+            };
+
+            layers.push(Layer {
+                values: Array1::from_vec(layer_snapshot.values.clone()),
+                predictions: Array1::from_vec(layer_snapshot.predictions.clone()),
+                errors: Array1::from_vec(layer_snapshot.errors.clone()),
+                weights,
+                pinned: layer_snapshot.pinned,
+                activation_function: layer_snapshot.activation_function,
+                size: layer_snapshot.size,
+                xavier_limit,
+            });
+        }
+
+        Ok(PredictiveCodingModel {
+            layers,
+            alpha: snapshot.config.alpha,
+            gamma: snapshot.config.gamma,
+            convergence_threshold: snapshot.config.convergence_threshold,
+            convergence_steps: snapshot.config.convergence_steps,
+        })
+    }
+
+    pub fn to_snapshot(&self) -> ModelSnapshot {
+        ModelSnapshot {
+            config: self.get_config(),
+            layers: self
+                .layers
+                .iter()
+                .map(|layer| LayerSnapshot {
+                    values: layer.values.to_vec(),
+                    predictions: layer.predictions.to_vec(),
+                    errors: layer.errors.to_vec(),
+                    weights: layer.weights.iter().copied().collect(),
+                    weight_rows: layer.weights.nrows(),
+                    weight_cols: layer.weights.ncols(),
+                    pinned: layer.pinned,
+                    activation_function: layer.activation_function,
+                    size: layer.size,
+                })
+                .collect(),
+        }
+    }
+
     pub fn get_layers(&self) -> &Vec<Layer> {
         &self.layers
     }
@@ -331,150 +349,11 @@ impl PredictiveCodingModel {
     /// Should be called before each new training sample to avoid carrying over
     /// converged state from a previous sample.
     pub fn reinitialise_latents(&mut self) {
-        let mut rng = rand::rng();
+        let mut rng: ThreadRng = rand::rng();
         for layer in &mut self.layers {
             if !layer.pinned {
                 layer.randomise_values(&mut rng);
             }
-        }
-    }
-
-    /// Evolves node values until convergence, recomputing predictions and errors each step.
-    /// Returns the number of steps taken to converge.
-    pub fn converge_values(&mut self) -> u32 {
-        let mut converged: bool = false;
-        let mut convergence_count: u32 = 0;
-
-        while !converged && (convergence_count < self.convergence_steps) {
-            self.compute_predictions_and_errors();
-
-            if self.timestep().abs() < self.convergence_threshold {
-                converged = true;
-            }
-            convergence_count += 1;
-        }
-
-        convergence_count
-    }
-
-    /// Compute predictions for each layer and then update errors.
-    pub fn compute_predictions_and_errors(&mut self) {
-        self.compute_predictions();
-        self.compute_errors();
-    }
-
-    /// Compute predictions for all layers from top to bottom.
-    pub fn compute_predictions(&mut self) {
-        let num_layers = self.layers.len();
-        for i in (0..num_layers - 1).rev() {
-            // iterate backwards through the layers
-            // Since the target layer needs to be mutable to update the predictions, I need to split the vector
-            // Luckily, this is not a transformative operation, so split_at_mut is still fast
-            let (lower, upper) = self.layers.split_at_mut(i + 1);
-            let lower_layer = &mut lower[i];
-            let upper_layer = &upper[0];
-
-            lower_layer.compute_predictions(upper_layer);
-        }
-    }
-
-    /// Compute prediction errors for all layers.
-    pub fn compute_errors(&mut self) {
-        for i in 0..self.layers.len() {
-            self.layers[i].compute_errors();
-        }
-    }
-
-    /// Sum signed errors across all layers.
-    pub fn read_total_error(&self) -> f32 {
-        // Sum the errors of all nodes in all layers
-        let mut total_error = 0.0;
-        for layer in &self.layers {
-            total_error += layer.read_total_error();
-        }
-        total_error
-    }
-
-    /// Sum squared errors across all layers.
-    pub fn read_total_energy(&self) -> f32 {
-        // Sum the energy of all nodes in all layers
-        let mut total_energy = 0.0;
-        for layer in &self.layers {
-            total_energy += layer.read_total_energy();
-        }
-
-        0.5 * total_energy
-    }
-
-    /// Compute the change in node values under a single timestep of PC.
-    /// Returns the mean change in node values across all layers.
-    pub fn timestep(&mut self) -> f32 {
-        let mut total_value_changes = 0.0;
-
-        // update the input layer, which has no lower layer
-        total_value_changes += self.layers[0].values_timestep(false, self.gamma, None);
-
-        // the update of a node value depends on the errors of the layer below it.
-        let num_layers: usize = self.layers.len();
-        for i in 1..num_layers {
-            // Skip the first layer. The range is exclusive of the upper bound
-            let (lower, upper) = self.layers.split_at_mut(i);
-            let lower_layer: &Layer = &lower[i - 1];
-            let upper_layer: &mut Layer = &mut upper[0];
-
-            // The last layer is handled differently.
-            if i == num_layers - 1 {
-                // the last i to be processed will be the second to last layer
-                total_value_changes +=
-                    upper_layer.values_timestep(true, self.gamma, Some(lower_layer));
-            } else {
-                total_value_changes +=
-                    upper_layer.values_timestep(false, self.gamma, Some(lower_layer));
-            }
-        }
-
-        // Mean
-        let total_num_nodes = self
-            .layers
-            .iter()
-            .map(|layer| layer.values.len())
-            .sum::<usize>() as f32;
-        total_value_changes / total_num_nodes
-    }
-
-    /// Compute and apply prediction weights for all layers after inference.
-    pub fn update_weights(&mut self) {
-        let num_layers = self.layers.len();
-        for i in 0..num_layers - 1 {
-            let (lower, upper) = self.layers.split_at_mut(i + 1);
-            let lower_layer: &Layer = &lower[i];
-            let upper_layer: &mut Layer = &mut upper[0];
-
-            upper_layer.update_weights(self.alpha, lower_layer);
-        }
-    }
-
-    /// Compute the change in weights based on the current errors and values, without applying the changes to the model.
-    /// Returns a Vec where index i contains the weight updates for layers[i+1].weights.
-    pub fn compute_weight_updates(&mut self) -> Vec<Array2<f32>> {
-        let mut weight_updates: Vec<Array2<f32>> = Vec::new();
-
-        let num_layers = self.layers.len();
-        for i in 0..num_layers - 1 {
-            let (lower, upper) = self.layers.split_at_mut(i + 1);
-            let lower_layer: &Layer = &lower[i];
-            let upper_layer: &mut Layer = &mut upper[0];
-
-            weight_updates.push(upper_layer.compute_weight_updates(self.alpha, lower_layer));
-        }
-
-        weight_updates
-    }
-
-    pub fn apply_weight_updates(&mut self, weight_updates: Vec<Array2<f32>>) {
-        // weight_updates[i] corresponds to layers[i+1].weights
-        for (i, weights) in weight_updates.iter().enumerate() {
-            self.layers[i + 1].weights += weights;
         }
     }
 }
@@ -482,6 +361,7 @@ impl PredictiveCodingModel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::PredictiveCodingModelConfig;
     use ndarray::array;
 
     #[test]
@@ -527,25 +407,20 @@ mod tests {
     }
 
     #[test]
-    fn timestep_uses_hidden_layer_error_term_for_non_top_layers() {
-        let mut model = PredictiveCodingModel::new(&PredictiveCodingModelConfig {
-            layer_sizes: vec![1, 1, 1],
-            alpha: 0.05,
-            gamma: 0.5,
+    fn model_snapshot_round_trips_through_portable_snapshot() {
+        let model = PredictiveCodingModel::new(&PredictiveCodingModelConfig {
+            layer_sizes: vec![4, 10],
+            alpha: 0.01,
+            gamma: 0.05,
             convergence_threshold: 0.0,
-            convergence_steps: 1,
+            convergence_steps: 2,
             activation_function: ActivationFunction::Relu,
         });
 
-        model.layers[0].pinned = true;
-        model.layers[0].errors = array![0.0];
-        model.layers[1].values = array![1.0];
-        model.layers[1].errors = array![0.25];
-        model.layers[1].weights = array![[1.0]];
-        model.layers[2].pinned = true;
+        let snapshot = model.to_snapshot();
+        let restored = PredictiveCodingModel::from_snapshot(&snapshot).unwrap();
 
-        model.timestep();
-
-        assert_eq!(model.layers[1].values, array![0.875]);
+        assert_eq!(restored.get_config(), model.get_config());
+        assert_eq!(restored.get_layer_sizes(), model.get_layer_sizes());
     }
 }

@@ -5,7 +5,7 @@ edition = "2024"
 
 [[bin]]
 name = "gpu_test"
-path = "src/gpu_playground/intel.rs"
+path = "src/gpu_playground/wgpu_helloworld.rs"
 
 [[bin]]
 name = "bench"
