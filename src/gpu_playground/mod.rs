@@ -1,1 +1,1 @@
-pub mod intel;
+pub mod wgpu_helloworld;
