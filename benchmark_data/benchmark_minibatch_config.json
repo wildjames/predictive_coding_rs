@@ -2,10 +2,16 @@
   "model_source": {
     "Config": "benchmark_data/model_config.json"
   },
-  "dataset": {
+  "training_dataset": {
     "IdxFormat": {
       "input_idx_file": "data/mnist/train-images-idx3-ubyte",
       "output_idx_file": "data/mnist/train-labels-idx1-ubyte"
+    }
+  },
+  "evaluation_dataset": {
+    "IdxFormat": {
+      "input_idx_file": "data/mnist/t10k-images-idx3-ubyte",
+      "output_idx_file": "data/mnist/t10k-labels-idx1-ubyte"
     }
   },
   "training_strategy": {

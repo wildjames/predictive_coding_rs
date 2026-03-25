@@ -1,0 +1,21 @@
+{
+  "model_source": {
+    "Config": "benchmark_data/model_config.json"
+  },
+  "training_dataset": {
+    "IdxFormat": {
+      "input_idx_file": "data/mnist/train-images-idx3-ubyte",
+      "output_idx_file": "data/mnist/train-labels-idx1-ubyte"
+    }
+  },
+  "evaluation_dataset": {
+    "IdxFormat": {
+      "input_idx_file": "data/mnist/t10k-images-idx3-ubyte",
+      "output_idx_file": "data/mnist/t10k-labels-idx1-ubyte"
+    }
+  },
+  "training_strategy": "SingleThread",
+  "training_steps": 100,
+  "report_interval": 0,
+  "snapshot_interval": 0
+}
