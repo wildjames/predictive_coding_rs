@@ -6,6 +6,7 @@ edition = "2024"
 [[bin]]
 name = "gpu_test"
 path = "src/gpu_playground/wgpu_helloworld.rs"
+required-features = ["gpu"]
 
 [[bin]]
 name = "bench"
