@@ -10,6 +10,7 @@ I have, at the time of writing, got a model architecture that converges on a rou
 
 - [Model configuration](docs/model-config.md)
 - [Training configuration](docs/training-config.md)
+- [GPU rollout plan](docs/intel-gpu-rust-learning-ladder.md)
 
 # TODO
 

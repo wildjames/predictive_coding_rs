@@ -1,7 +1,10 @@
 use crate::{
     data_handling::TrainingDataset,
     error::Result,
-    model::{PredictiveCodingModel, model_utils::set_rand_input_and_output},
+    model::{
+        CpuModelRuntime, ModelRuntime, PredictiveCodingModel, TrainableModelRuntime,
+        WeightUpdateSet, model_utils::set_rand_input_and_output,
+    },
 };
 
 use super::{TrainConfig, TrainingHandler};
@@ -14,7 +17,7 @@ use tracing::{debug, info};
 
 pub struct BatchTrainHandler {
     config: TrainConfig,
-    model: PredictiveCodingModel,
+    runtime: CpuModelRuntime,
     data: Arc<dyn TrainingDataset>,
     file_output_prefix: String,
     batch_size: u32,
@@ -30,7 +33,7 @@ impl BatchTrainHandler {
     ) -> Self {
         BatchTrainHandler {
             config,
-            model,
+            runtime: CpuModelRuntime::from_model(model),
             data,
             file_output_prefix,
             batch_size,
@@ -43,7 +46,7 @@ impl TrainingHandler for BatchTrainHandler {
         &self.config
     }
     fn get_model(&mut self) -> &mut PredictiveCodingModel {
-        &mut self.model
+        self.runtime.model_mut()
     }
     fn get_data(&self) -> &dyn TrainingDataset {
         self.data.as_ref()
@@ -69,27 +72,28 @@ impl TrainingHandler for BatchTrainHandler {
         // Each element of the batch trains on a single sample, and we collect their weight changes as a result.
         // The batch weight changes will be a Vec of length batch_size, where each element is a Vec of length
         // num_layers, and each element of THAT is an array2 of the weight changes for the relevant layer.
-        let batch_weight_changes: Vec<Vec<Array2<f32>>> = batch_inputs_and_outputs
+        let batch_weight_changes: Vec<Result<WeightUpdateSet>> = batch_inputs_and_outputs
             .into_par_iter()
             .map(|(input_data, output_data)| {
                 debug!(
                     "Training on batch element with input {:?} and output {:?}",
                     input_data, output_data
                 );
-                let mut model_clone: PredictiveCodingModel = self.model.clone();
+                // Each thread gets its own runtime clone, and trains it independently
+                let mut runtime_clone: CpuModelRuntime =
+                    CpuModelRuntime::from_model(self.runtime.model().clone());
 
                 // Set the model input and output to the batch element's data
-                model_clone.set_input(input_data);
-                model_clone.set_output(output_data);
+                runtime_clone.model_mut().set_input(input_data);
+                runtime_clone.model_mut().set_output(output_data);
 
-                model_clone.reinitialise_latents();
+                runtime_clone.reinitialise_latents()?;
 
                 // Train on this example until convergence.
-                model_clone.converge_values();
-                model_clone.update_weights();
+                runtime_clone.converge_values()?;
 
-                // Weight updates (Array2) for each layer in the model
-                model_clone.compute_weight_updates()
+                let updates: WeightUpdateSet = runtime_clone.compute_weight_updates()?;
+                Ok(updates)
             })
             .collect();
         debug!(
@@ -97,24 +101,51 @@ impl TrainingHandler for BatchTrainHandler {
             self.batch_size
         );
 
-        // Average the weight changes across the batch. Sum outer Vec
-        let sum_batch_weight_changes: Vec<Array2<f32>> = batch_weight_changes
+        // Unwrap results and collect into Vec<WeightUpdateSet>
+        let successful_updates: Vec<WeightUpdateSet> = batch_weight_changes
             .into_iter()
-            .reduce(|acc, weight_changes| {
-                acc.into_iter()
-                    .zip(weight_changes)
-                    .map(|(sum_weight_change, weight_change)| sum_weight_change + weight_change)
-                    .collect()
-            })
-            .unwrap();
+            .collect::<Result<Vec<_>>>()?;
 
+        // Reconstruct Array2s from the first element to initialise the sum
+        let first = &successful_updates[0];
+        let mut sum_batch_weight_changes: Vec<Array2<f32>> = first
+            .updates
+            .iter()
+            .zip(first.shapes.iter())
+            .map(|(data, &(rows, cols))| {
+                Array2::from_shape_vec((rows, cols), data.clone()).unwrap()
+            })
+            .collect();
+
+        // Accumulate remaining updates
+        for update_set in &successful_updates[1..] {
+            for (sum, (data, &(rows, cols))) in sum_batch_weight_changes
+                .iter_mut()
+                .zip(update_set.updates.iter().zip(update_set.shapes.iter()))
+            {
+                let array = Array2::from_shape_vec((rows, cols), data.clone()).unwrap();
+                *sum += &array;
+            }
+        }
+
+        // Average the weight changes across the batch
         let avg_batch_weight_changes: Vec<Array2<f32>> = sum_batch_weight_changes
             .into_iter()
-            .map(|sum_weight_change: Array2<f32>| sum_weight_change / self.batch_size as f32)
+            .map(|sum_weight_change| sum_weight_change / self.batch_size as f32)
             .collect();
 
         // Apply the average weight changes to the model.
-        self.model.apply_weight_updates(avg_batch_weight_changes);
+        let updates = WeightUpdateSet {
+            updates: avg_batch_weight_changes
+                .iter()
+                .map(|array| array.iter().copied().collect())
+                .collect(),
+            shapes: avg_batch_weight_changes
+                .iter()
+                .map(|array| array.dim())
+                .collect(),
+        };
+        self.runtime.apply_weight_updates(&updates)?;
 
         Ok(())
     }
@@ -133,11 +164,11 @@ impl TrainingHandler for BatchTrainHandler {
 
         // The mini batch model is cloned for each batch element, so the main model never gets inference run on it
         // So, do that in the reporting step to get a sense of how the model is doing on the data.
-        self.model.reinitialise_latents();
-        set_rand_input_and_output(&mut self.model, self.data.as_ref());
-        self.model.converge_values();
+        self.runtime.reinitialise_latents()?;
+        set_rand_input_and_output(self.runtime.model_mut(), self.data.as_ref());
+        self.runtime.converge_values()?;
 
-        let energy: f32 = self.model.read_total_energy();
+        let energy: f32 = self.runtime.total_energy()?;
         info!(
             "Step {}: Current model state: energy = {:.2}\tEstimated finish time: {}",
             step,

@@ -3,7 +3,10 @@
 use crate::{
     data_handling::TrainingDataset,
     error::Result,
-    model::{PredictiveCodingModel, model_utils::set_rand_input_and_output},
+    model::{
+        CpuModelRuntime, ModelRuntime, PredictiveCodingModel, TrainableModelRuntime,
+        model_utils::set_rand_input_and_output,
+    },
 };
 
 use super::{TrainConfig, TrainingHandler};
@@ -14,7 +17,7 @@ use tracing::{debug, info};
 
 pub struct SingleThreadTrainHandler {
     config: TrainConfig,
-    model: PredictiveCodingModel,
+    runtime: CpuModelRuntime,
     data: Arc<dyn TrainingDataset>,
     file_output_prefix: String,
 }
@@ -28,7 +31,7 @@ impl SingleThreadTrainHandler {
     ) -> Self {
         SingleThreadTrainHandler {
             config,
-            model,
+            runtime: CpuModelRuntime::from_model(model),
             data,
             file_output_prefix,
         }
@@ -40,7 +43,7 @@ impl TrainingHandler for SingleThreadTrainHandler {
         &self.config
     }
     fn get_model(&mut self) -> &mut PredictiveCodingModel {
-        &mut self.model
+        self.runtime.model_mut()
     }
     fn get_data(&self) -> &dyn TrainingDataset {
         self.data.as_ref()
@@ -55,12 +58,12 @@ impl TrainingHandler for SingleThreadTrainHandler {
     }
 
     fn train_step(&mut self, _step: u32) -> Result<()> {
-        set_rand_input_and_output(&mut self.model, self.data.as_ref());
-        self.model.reinitialise_latents();
+        set_rand_input_and_output(self.runtime.model_mut(), self.data.as_ref());
+        self.runtime.reinitialise_latents()?;
 
         // Train on this example until convergence.
-        self.model.converge_values();
-        self.model.update_weights();
+        self.runtime.converge_values()?;
+        self.runtime.update_weights()?;
 
         Ok(())
     }
@@ -77,7 +80,7 @@ impl TrainingHandler for SingleThreadTrainHandler {
         let est_finish_time: chrono::DateTime<chrono::Utc> =
             chrono::Utc::now() + est_time_to_finish;
 
-        let energy: f32 = self.model.read_total_energy();
+        let energy: f32 = self.runtime.total_energy()?;
         info!(
             "Step {}: Current model state: energy = {:.2}\tEstimated finish time: {}",
             step,

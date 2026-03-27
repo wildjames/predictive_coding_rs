@@ -1,0 +1,1 @@
+{"layer_sizes":[784,512,256,10],"alpha":0.002,"gamma":0.05,"convergence_threshold":0.00001,"convergence_steps":80,"activation_function":"Relu"}

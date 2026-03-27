@@ -3,7 +3,7 @@ use crate::{
     utils::ensure_parent_dir,
 };
 
-use super::{PredictiveCodingModel, PredictiveCodingModelConfig};
+use super::{ModelSnapshot, PredictiveCodingModel, PredictiveCodingModelConfig};
 
 pub fn load_model_config(fname: &str) -> Result<PredictiveCodingModelConfig> {
     let file = std::fs::File::open(fname)
@@ -32,7 +32,7 @@ pub fn save_model_config(config: &PredictiveCodingModelConfig, filename: &str) -
 pub fn save_model_snapshot(model: &PredictiveCodingModel, filename: &str) -> Result<()> {
     ensure_parent_dir(filename)?;
 
-    let model_ser = serde_json::to_string(&model)
+    let model_ser = serde_json::to_string(&model.to_snapshot())
         .map_err(|source| PredictiveCodingError::json_serialize(filename, source))?;
     std::fs::write(filename, model_ser)
         .map_err(|source| PredictiveCodingError::io("write model snapshot", filename, source))?;
@@ -44,13 +44,27 @@ pub fn load_model_snapshot(filename: &str) -> Result<PredictiveCodingModel> {
     let model_ser = std::fs::read_to_string(filename)
         .map_err(|source| PredictiveCodingError::io("read model snapshot", filename, source))?;
 
-    serde_json::from_str(&model_ser)
+    // First, parse into a generic JSON value so we can distinguish formats
+    let json_value: serde_json::Value = serde_json::from_str(&model_ser)
+        .map_err(|source| PredictiveCodingError::json_deserialize(filename, source))?;
+
+    // If this looks like a snapshot (has a top-level "config" key),
+    // attempt to deserialize as ModelSnapshot and surface any errors directly.
+    if json_value.get("config").is_some() {
+        let snapshot: ModelSnapshot = serde_json::from_value(json_value)
+            .map_err(|source| PredictiveCodingError::json_deserialize(filename, source))?;
+        return PredictiveCodingModel::from_snapshot(&snapshot);
+    }
+
+    // Otherwise, fall back to the legacy format (directly serialized model).
+    serde_json::from_value(json_value)
         .map_err(|source| PredictiveCodingError::json_deserialize(filename, source))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::{CpuModelRuntime, ModelRuntime};
     use crate::test_utils::{TempDir, write_file};
 
     use crate::model::maths::ActivationFunction;
@@ -135,13 +149,21 @@ mod tests {
 
         model.set_input(array![1.0, 0.0, 0.5, 0.25]);
         model.set_output(array![0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
-        model.compute_predictions_and_errors();
+        let mut runtime = CpuModelRuntime::from_model(model);
+        runtime.compute_predictions_and_errors().unwrap();
 
-        save_model_snapshot(&model, snapshot_path.to_str().unwrap()).unwrap();
+        save_model_snapshot(runtime.model(), snapshot_path.to_str().unwrap()).unwrap();
         let loaded_model = load_model_snapshot(snapshot_path.to_str().unwrap()).unwrap();
 
-        let original_json = serde_json::to_value(&model).unwrap();
-        let loaded_json = serde_json::to_value(&loaded_model).unwrap();
-        assert_eq!(loaded_json, original_json);
+        assert_eq!(loaded_model.to_snapshot(), runtime.model().to_snapshot());
+    }
+
+    #[test]
+    fn load_model_snapshot_accepts_legacy_model_json() {
+        let loaded_model = load_model_snapshot("test_data/model_snapshot_tiny.json").unwrap();
+
+        assert_eq!(loaded_model.get_config().layer_sizes, vec![4, 10]);
+        assert_eq!(loaded_model.get_alpha(), 0.01);
+        assert_eq!(loaded_model.get_gamma(), 0.05);
     }
 }

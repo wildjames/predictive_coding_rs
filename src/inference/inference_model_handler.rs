@@ -4,7 +4,7 @@ use ndarray::Array1;
 
 use crate::{
     error::{PredictiveCodingError, Result},
-    model::{PredictiveCodingModel, load_model_snapshot},
+    model::{CpuModelRuntime, ModelRuntime, PredictiveCodingModel, load_model_snapshot},
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -16,35 +16,38 @@ pub struct InferencePrediction {
 }
 
 pub struct InferenceModelHandler {
-    model: PredictiveCodingModel,
+    runtime: CpuModelRuntime,
 }
 
 impl InferenceModelHandler {
     pub fn load_snapshot(model_file: &str) -> Result<Self> {
-        let mut model = load_model_snapshot(model_file)?;
-        model.unpin_output();
+        let mut runtime = CpuModelRuntime::from_model(load_model_snapshot(model_file)?);
+        runtime.unpin_output()?;
 
-        Ok(InferenceModelHandler { model })
+        Ok(InferenceModelHandler { runtime })
     }
 
     pub fn from_model(mut model: PredictiveCodingModel) -> Self {
         model.unpin_output();
-        InferenceModelHandler { model }
+        InferenceModelHandler {
+            runtime: CpuModelRuntime::from_model(model),
+        }
     }
 
     pub fn prepare_input(&mut self, input_values: Array1<f32>) {
-        self.model.reinitialise_latents();
-        self.model.set_input(input_values);
+        self.runtime.model_mut().reinitialise_latents();
+        self.runtime.model_mut().set_input(input_values);
     }
 
-    pub fn converge(&mut self) -> f32 {
+    /// Returns the time taken to converge in milliseconds.
+    pub fn converge(&mut self) -> Result<f32> {
         let start_time = Instant::now();
-        self.model.converge_values();
-        start_time.elapsed().as_secs_f32() * 1000.0
+        self.runtime.converge_values()?;
+        Ok(start_time.elapsed().as_secs_f32() * 1000.0)
     }
 
     pub fn read_output_activations(&self) -> &Array1<f32> {
-        self.model.get_output()
+        self.runtime.model().get_output()
     }
 
     pub fn read_prediction(&self, elapsed_time_ms: f32) -> Result<InferencePrediction> {
@@ -53,12 +56,12 @@ impl InferenceModelHandler {
 
     pub fn infer(&mut self, input_values: Array1<f32>) -> Result<InferencePrediction> {
         self.prepare_input(input_values);
-        let elapsed_time_ms = self.converge();
+        let elapsed_time_ms = self.converge()?;
         self.read_prediction(elapsed_time_ms)
     }
 
     pub fn model(&self) -> &PredictiveCodingModel {
-        &self.model
+        self.runtime.model()
     }
 }
 
