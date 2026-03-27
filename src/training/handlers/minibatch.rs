@@ -72,7 +72,7 @@ impl TrainingHandler for BatchTrainHandler {
         // Each element of the batch trains on a single sample, and we collect their weight changes as a result.
         // The batch weight changes will be a Vec of length batch_size, where each element is a Vec of length
         // num_layers, and each element of THAT is an array2 of the weight changes for the relevant layer.
-        let batch_weight_changes: Vec<Vec<Array2<f32>>> = batch_inputs_and_outputs
+        let batch_weight_changes: Vec<Result<WeightUpdateSet>> = batch_inputs_and_outputs
             .into_par_iter()
             .map(|(input_data, output_data)| {
                 debug!(
@@ -87,23 +87,13 @@ impl TrainingHandler for BatchTrainHandler {
                 runtime_clone.model_mut().set_input(input_data);
                 runtime_clone.model_mut().set_output(output_data);
 
-                runtime_clone.reinitialise_latents().unwrap();
+                runtime_clone.reinitialise_latents()?;
 
                 // Train on this example until convergence.
-                runtime_clone.converge_values().unwrap();
+                runtime_clone.converge_values()?;
 
-                let updates: WeightUpdateSet = runtime_clone.compute_weight_updates().unwrap();
-
-                // Coerce weight updates shape to output format (they need to be averaged later)
-                // TODO: This is clunky - I should return the WeightUpdateSet and do the extraction outside the loop
-                updates
-                    .updates
-                    .into_iter()
-                    .zip(updates.shapes)
-                    .map(|(values, (rows, cols))| {
-                        Array2::from_shape_vec((rows, cols), values).unwrap()
-                    })
-                    .collect()
+                let updates: WeightUpdateSet = runtime_clone.compute_weight_updates()?;
+                Ok(updates)
             })
             .collect();
         debug!(
@@ -111,20 +101,37 @@ impl TrainingHandler for BatchTrainHandler {
             self.batch_size
         );
 
-        // Average the weight changes across the batch. Sum outer Vec
-        let sum_batch_weight_changes: Vec<Array2<f32>> = batch_weight_changes
+        // Unwrap results and collect into Vec<WeightUpdateSet>
+        let successful_updates: Vec<WeightUpdateSet> = batch_weight_changes
             .into_iter()
-            .reduce(|acc, weight_changes| {
-                acc.into_iter()
-                    .zip(weight_changes)
-                    .map(|(sum_weight_change, weight_change)| sum_weight_change + weight_change)
-                    .collect()
-            })
-            .unwrap();
+            .collect::<Result<Vec<_>>>()?;
 
+        // Reconstruct Array2s from the first element to initialise the sum
+        let first = &successful_updates[0];
+        let mut sum_batch_weight_changes: Vec<Array2<f32>> = first
+            .updates
+            .iter()
+            .zip(first.shapes.iter())
+            .map(|(data, &(rows, cols))| {
+                Array2::from_shape_vec((rows, cols), data.clone()).unwrap()
+            })
+            .collect();
+
+        // Accumulate remaining updates
+        for update_set in &successful_updates[1..] {
+            for (sum, (data, &(rows, cols))) in sum_batch_weight_changes
+                .iter_mut()
+                .zip(update_set.updates.iter().zip(update_set.shapes.iter()))
+            {
+                let array = Array2::from_shape_vec((rows, cols), data.clone()).unwrap();
+                *sum += &array;
+            }
+        }
+
+        // Average the weight changes across the batch
         let avg_batch_weight_changes: Vec<Array2<f32>> = sum_batch_weight_changes
             .into_iter()
-            .map(|sum_weight_change: Array2<f32>| sum_weight_change / self.batch_size as f32)
+            .map(|sum_weight_change| sum_weight_change / self.batch_size as f32)
             .collect();
 
         // Apply the average weight changes to the model.
