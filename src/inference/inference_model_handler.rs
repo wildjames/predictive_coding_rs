@@ -39,12 +39,11 @@ impl InferenceModelHandler {
         self.runtime.model_mut().set_input(input_values);
     }
 
-    pub fn converge(&mut self) -> f32 {
+    /// Returns the time taken to converge in milliseconds.
+    pub fn converge(&mut self) -> Result<f32> {
         let start_time = Instant::now();
-        self.runtime
-            .converge_values()
-            .expect("CPU runtime convergence should be infallible");
-        start_time.elapsed().as_secs_f32() * 1000.0
+        self.runtime.converge_values()?;
+        Ok(start_time.elapsed().as_secs_f32() * 1000.0)
     }
 
     pub fn read_output_activations(&self) -> &Array1<f32> {
@@ -57,7 +56,7 @@ impl InferenceModelHandler {
 
     pub fn infer(&mut self, input_values: Array1<f32>) -> Result<InferencePrediction> {
         self.prepare_input(input_values);
-        let elapsed_time_ms = self.converge();
+        let elapsed_time_ms = self.converge()?;
         self.read_prediction(elapsed_time_ms)
     }
 

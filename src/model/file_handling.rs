@@ -44,11 +44,20 @@ pub fn load_model_snapshot(filename: &str) -> Result<PredictiveCodingModel> {
     let model_ser = std::fs::read_to_string(filename)
         .map_err(|source| PredictiveCodingError::io("read model snapshot", filename, source))?;
 
-    if let Ok(snapshot) = serde_json::from_str::<ModelSnapshot>(&model_ser) {
+    // First, parse into a generic JSON value so we can distinguish formats
+    let json_value: serde_json::Value = serde_json::from_str(&model_ser)
+        .map_err(|source| PredictiveCodingError::json_deserialize(filename, source))?;
+
+    // If this looks like a snapshot (has a top-level "config" key),
+    // attempt to deserialize as ModelSnapshot and surface any errors directly.
+    if json_value.get("config").is_some() {
+        let snapshot: ModelSnapshot = serde_json::from_value(json_value)
+            .map_err(|source| PredictiveCodingError::json_deserialize(filename, source))?;
         return PredictiveCodingModel::from_snapshot(&snapshot);
     }
 
-    serde_json::from_str(&model_ser)
+    // Otherwise, fall back to the legacy format (directly serialized model).
+    serde_json::from_value(json_value)
         .map_err(|source| PredictiveCodingError::json_deserialize(filename, source))
 }
 
