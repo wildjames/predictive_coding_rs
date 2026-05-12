@@ -26,7 +26,7 @@ I have, at the time of writing, got a model architecture that converges on a rou
 - [x] Make the dataset struct more generic
 	- [ ] I need to update the loader config for IDX to accept a parser, that specifies how the binary data should be pre-processed for the model
 
-- [ ] Work down the architecture refactoring suggested by chatGPT 5.4 [TODO.md](./TODO.md)
+- [x] Work down the architecture refactoring suggested by chatGPT 5.4
 
 - [x] Flesh out train binary
   - [x] allow user to resume from stored model
@@ -41,18 +41,11 @@ I have, at the time of writing, got a model architecture that converges on a rou
 	- [x] integration tests
 
 - [ ] more advanced training strategies
-
 	- [x] mini-batch sampling (optimise B samples in parallel, then for weight updates compute the mean $\Delta\bf{W}$ for the batches. 5.2. of 2506.06332)
-
 	- [ ] GPU training
-	  - I think this will require me to abstract the model logic out further, but I need to think about this. Will I need my own implementation of an `Array`, which then either wraps `ndarray` for CPU, or my own GPU code for that processing style?
-
 	- [ ] Dropout layers
-
 	- [ ] Layer normalisation ([medium post](https://medium.com/@sujathamudadla1213/layer-normalization-48ee115a14a4))
-
 	- [ ] GELU activation function
-
 	- [ ] Per-layer activation function definitions
 
 - [ ] Benchmark tracking

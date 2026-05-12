@@ -4,19 +4,19 @@ grab-mnist:
 	./scripts/grab_mnist.sh
 
 build:
-	cargo build --release
+	cargo build --release --all-features
 
-test:
-	cargo test
+test: build
+	cargo test --release --all-features
 
 clean:
 	cargo clean
 
 train: build
-	cargo run --release --bin train
+	cargo run --release --bin train --all-features
 
 bench: build
-	cargo run --release --bin bench
+	cargo run --release --bin bench --all-features
 
 coverage: build
 	cargo llvm-cov
