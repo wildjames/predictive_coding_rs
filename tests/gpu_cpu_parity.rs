@@ -30,7 +30,11 @@ fn assert_vecs_close(label: &str, cpu: &[f32], gpu: &[f32]) {
     }
 }
 
-/// Build a deterministic snapshot that both backends can start from.
+/// Build a snapshot that both backends can start from.
+///
+/// Weights and values are randomly initialised (not seeded), so results vary
+/// between runs.  Within a single run both the CPU and GPU runtimes receive
+/// the same byte-identical snapshot.
 fn make_test_snapshot(layer_sizes: &[usize], activation: ActivationFunction) -> ModelSnapshot {
     let config = PredictiveCodingModelConfig {
         layer_sizes: layer_sizes.to_vec(),
@@ -40,8 +44,8 @@ fn make_test_snapshot(layer_sizes: &[usize], activation: ActivationFunction) -> 
         convergence_steps: 50,
         activation_function: activation,
     };
-    // Build a random model and immediately snapshot it so both backends
-    // start from byte-identical state.
+    // Build a randomly-initialised model and immediately snapshot it so
+    // both backends start from byte-identical state.
     PredictiveCodingModel::new(&config).to_snapshot()
 }
 
