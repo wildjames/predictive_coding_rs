@@ -8,7 +8,8 @@ pub struct PcPipelines {
     pub predict: wgpu::ComputePipeline,
     pub errors: wgpu::ComputePipeline,
     pub timestep: wgpu::ComputePipeline,
-    pub weight_update: wgpu::ComputePipeline,
+    pub compute_weight_deltas: wgpu::ComputePipeline,
+    pub apply_weight_deltas: wgpu::ComputePipeline,
 }
 
 impl PcPipelines {
@@ -66,7 +67,11 @@ impl PcPipelines {
             predict: make_pe("compute_predictions", "predict_pipeline"),
             errors: make_pe("compute_errors", "errors_pipeline"),
             timestep: make_tw("values_timestep", "timestep_pipeline"),
-            weight_update: make_tw("compute_weight_updates", "weight_update_pipeline"),
+            compute_weight_deltas: make_tw(
+                "compute_weight_deltas",
+                "compute_weight_deltas_pipeline",
+            ),
+            apply_weight_deltas: make_tw("apply_weight_deltas", "apply_weight_deltas_pipeline"),
         }
     }
 }

@@ -9,6 +9,7 @@
 //   @group(0) @binding(4)  upper_value_changes  : array<f32>  (rw)
 //   @group(0) @binding(5)  lower_errors         : array<f32>  (read)
 //   @group(0) @binding(6)  params               : vec4<f32>   (uniform) [alpha, gamma, conv_thresh, conv_steps]
+//   @group(0) @binding(7)  weight_deltas        : array<f32>  (rw)
 // ---------------------------------------------------------------------------
 
 // Activation function IDs (must match buffers::ACTIVATION_* constants)
@@ -25,6 +26,7 @@ const ACTIVATION_TANH: u32    = 2u;
 @group(0) @binding(4) var<storage, read_write> upper_value_changes  : array<f32>;
 @group(0) @binding(5) var<storage, read>       lower_errors         : array<f32>;
 @group(0) @binding(6) var<uniform>             params               : vec4<f32>;
+@group(0) @binding(7) var<storage, read_write> weight_deltas        : array<f32>;
 
 // ---- helpers --------------------------------------------------------------
 
@@ -116,14 +118,13 @@ fn values_timestep(@builtin(global_invocation_id) gid: vec3<u32>) {
     upper_value_changes[idx] = abs(value_change);
 }
 
-/// Compute and apply weight updates in-place (Hebbian learning rule).
+/// Compute weight deltas into a separate buffer (no race on upper_weights).
 ///
 /// delta_W[i][j] = alpha * f'(preact[i]) * lower_errors[i] * upper_values[j]
-/// W[i][j] += delta_W[i][j]
 ///
 /// One thread per weight element.
 @compute @workgroup_size(64)
-fn compute_weight_updates(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn compute_weight_deltas(@builtin(global_invocation_id) gid: vec3<u32>) {
     let weight_rows = upper_meta[3]; // lower_size
     let weight_cols = upper_meta[4]; // upper_size
     let total       = weight_rows * weight_cols;
@@ -147,5 +148,24 @@ fn compute_weight_updates(@builtin(global_invocation_id) gid: vec3<u32>) {
     let gain_error = activation_derivative(preact, act_fn) * lower_errors[i];
     let delta = alpha * gain_error * upper_values[j];
 
-    upper_weights[flat_idx] = upper_weights[flat_idx] + delta;
+    weight_deltas[flat_idx] = delta;
+}
+
+/// Apply precomputed weight deltas to the weight matrix.
+///
+/// W[i][j] += weight_deltas[i * cols + j]
+///
+/// One thread per weight element. Must be dispatched AFTER compute_weight_deltas.
+@compute @workgroup_size(64)
+fn apply_weight_deltas(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let weight_rows = upper_meta[3];
+    let weight_cols = upper_meta[4];
+    let total       = weight_rows * weight_cols;
+    let flat_idx    = gid.x;
+
+    if flat_idx >= total {
+        return;
+    }
+
+    upper_weights[flat_idx] = upper_weights[flat_idx] + weight_deltas[flat_idx];
 }

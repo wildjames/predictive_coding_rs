@@ -262,16 +262,17 @@ impl GpuModelRuntime {
         Ok(total / total_nodes as f32)
     }
 
-    /// Dispatch the weight-update kernel for every layer pair.
+    /// Dispatch the weight-update kernel for every layer pair (two-pass).
     ///
-    /// This applies `W += alpha * outer(f'(W /cdot x) /odot lower_errors, upper_values)`
-    /// in-place on the GPU.
+    /// Pass 1: compute deltas into a separate buffer
+    /// Pass 2: apply deltas to the weight matrix
     fn dispatch_weight_updates(&self) {
+        // Pass 1
         let mut encoder = self
             .ctx
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("weight_update_encoder"),
+                label: Some("weight_deltas_encoder"),
             });
 
         // Skip layer 0 (no weights to update).
@@ -284,7 +285,31 @@ impl GpuModelRuntime {
             let workgroups = total_weights.div_ceil(64);
 
             let mut pass = encoder.begin_compute_pass(&Default::default());
-            pass.set_pipeline(&self.pipelines.weight_update);
+            pass.set_pipeline(&self.pipelines.compute_weight_deltas);
+            pass.set_bind_group(0, &self.tw_bind_groups[i], &[]);
+            pass.dispatch_workgroups(workgroups, 1, 1);
+        }
+
+        self.ctx.queue.submit(std::iter::once(encoder.finish()));
+
+        // Pass 2
+        let mut encoder = self
+            .ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("apply_weight_deltas_encoder"),
+            });
+
+        for i in 1..self.tw_bind_groups.len() {
+            let lb = &self.buffers.layers[i];
+            let total_weights = (lb.weight_rows * lb.weight_cols) as u32;
+            if total_weights == 0 {
+                continue;
+            }
+            let workgroups = total_weights.div_ceil(64);
+
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&self.pipelines.apply_weight_deltas);
             pass.set_bind_group(0, &self.tw_bind_groups[i], &[]);
             pass.dispatch_workgroups(workgroups, 1, 1);
         }

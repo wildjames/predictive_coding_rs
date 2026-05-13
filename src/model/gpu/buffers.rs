@@ -18,6 +18,8 @@ pub struct LayerBuffers {
     pub predictions: wgpu::Buffer,
     pub errors: wgpu::Buffer,
     pub weights: wgpu::Buffer,
+    /// Per-weight scratch buffer holding computed deltas before applying to weights.
+    pub weight_deltas: wgpu::Buffer,
     /// Per-node scratch buffer holding `abs(value_change)` after a timestep dispatch.
     pub value_changes: wgpu::Buffer,
     /// Scalar buffer: `[pinned: u32, activation_fn: u32, size: u32, weight_rows: u32, weight_cols: u32, is_top_level: u32]`
@@ -105,6 +107,18 @@ impl LayerBuffers {
             usage: BUF_USAGE,
         });
 
+        let weight_delta_count = if layer.weights.is_empty() {
+            1
+        } else {
+            layer.weights.len()
+        };
+        let weight_delta_zeros = vec![0.0_f32; weight_delta_count];
+        let weight_deltas = device.create_buffer_init(&BufferInitDescriptor {
+            label: Some("layer_weight_deltas"),
+            contents: bytemuck::cast_slice(&weight_delta_zeros),
+            usage: BUF_USAGE,
+        });
+
         let meta_data: [u32; 6] = [
             layer.pinned as u32,
             activation_to_u32(layer.activation_function),
@@ -124,6 +138,7 @@ impl LayerBuffers {
             predictions,
             errors,
             weights,
+            weight_deltas,
             value_changes,
             meta,
             size: layer.size,
@@ -226,6 +241,15 @@ impl ModelBuffers {
     ) -> Result<Vec<f32>> {
         let count = layer_buf.weight_rows * layer_buf.weight_cols;
         read_buffer_f32(ctx, &layer_buf.weights, count).await
+    }
+
+    /// Read back `weight_deltas` from a single layer into CPU memory.
+    pub async fn download_weight_deltas(
+        ctx: &Arc<GpuContext>,
+        layer_buf: &LayerBuffers,
+    ) -> Result<Vec<f32>> {
+        let count = layer_buf.weight_rows * layer_buf.weight_cols;
+        read_buffer_f32(ctx, &layer_buf.weight_deltas, count).await
     }
 
     /// Read back `value_changes` (abs value deltas from last timestep) from a single layer.

@@ -11,7 +11,7 @@ use super::context::GpuContext;
 /// Two layouts are used to stay within the 8 storage-buffers-per-stage limit:
 ///
 /// - `predict_error`: used by `compute_predictions` and `compute_errors`.
-/// - `timestep_weight`: used by `values_timestep` and `compute_weight_updates`.
+/// - `timestep_weight`: used by `values_timestep`, `compute_weight_deltas`, and `apply_weight_deltas`.
 pub struct PcBindGroupLayouts {
     /// Layout for the predict / error kernels.
     ///
@@ -34,6 +34,7 @@ pub struct PcBindGroupLayouts {
     /// Binding 4: upper_value_changes  (storage, read_write)
     /// Binding 5: lower_errors         (storage, read)
     /// Binding 6: params               (uniform)
+    /// Binding 7: weight_deltas        (storage, read_write)
     pub timestep_weight: wgpu::BindGroupLayout,
 }
 
@@ -67,6 +68,7 @@ impl PcBindGroupLayouts {
                         storage_entry(4, false), // upper value_changes (rw)
                         storage_entry(5, true),  // lower errors
                         uniform_entry(6),        // params
+                        storage_entry(7, false), // weight_deltas (rw)
                     ],
                 });
 
@@ -195,6 +197,10 @@ pub fn create_timestep_weight_bind_group(
             wgpu::BindGroupEntry {
                 binding: 6,
                 resource: params.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 7,
+                resource: upper.weight_deltas.as_entire_binding(),
             },
         ],
     })
