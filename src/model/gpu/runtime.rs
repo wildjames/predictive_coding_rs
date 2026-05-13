@@ -1,0 +1,680 @@
+use std::sync::Arc;
+
+use crate::error::{PredictiveCodingError, Result};
+use crate::model::gpu::buffers::activation_function_from_u32;
+use crate::model::{
+    ExecutionBackend, ModelRuntime, ModelSnapshot, PredictiveCodingModelConfig,
+    TrainableModelRuntime, WeightUpdateSet, snapshot::LayerSnapshot,
+};
+
+use super::buffers::ModelBuffers;
+use super::context::GpuContext;
+use super::layout::{
+    PcBindGroupLayouts, create_predict_error_bind_group, create_timestep_weight_bind_group,
+};
+use super::pipelines::PcPipelines;
+
+/// GPU runtime for a predictive-coding model.
+///
+/// Owns the GPU buffers and pre-compiled pipelines.  All heavy compute is
+/// dispatched to the GPU and orchestration (convergence loop, etc.)
+/// stays on the CPU.
+pub struct GpuModelRuntime {
+    ctx: Arc<GpuContext>,
+    config: PredictiveCodingModelConfig,
+    buffers: ModelBuffers,
+    #[allow(dead_code)]
+    layouts: PcBindGroupLayouts,
+    pipelines: PcPipelines,
+    /// Predict/error bind groups - one per adjacent layer pair (len = num_layers - 1).
+    /// pe_bind_groups[i] binds upper=layer[i+1], lower=layer[i].
+    pe_bind_groups: Vec<wgpu::BindGroup>,
+    /// Timestep/weight-update bind groups - one per layer (len = num_layers).
+    /// tw_bind_groups[i] operates on layer[i] as the "upper" layer.
+    /// For layer 0, lower_errors is a dummy buffer (rhs will be 0).
+    tw_bind_groups: Vec<wgpu::BindGroup>,
+    /// Tokio runtime used to block on async GPU work from synchronous trait methods.
+    rt: tokio::runtime::Runtime,
+}
+
+/// These are GPU-specific methods not exposed by the ModelRuntime trait.
+impl GpuModelRuntime {
+    /// Build a new GPU runtime from a model snapshot.
+    ///
+    /// This is async because device creation is async.  Use
+    /// [`GpuModelRuntime::from_snapshot`] if you need a sync entry point.
+    pub async fn from_snapshot_async(snapshot: &ModelSnapshot) -> Result<Self> {
+        let ctx = GpuContext::new().await?;
+        let buffers = ModelBuffers::from_snapshot(&ctx, snapshot);
+        let layouts = PcBindGroupLayouts::new(&ctx);
+        let pipelines = PcPipelines::new(&ctx, &layouts);
+
+        let pe_bind_groups: Vec<wgpu::BindGroup> =
+            Self::build_pe_bind_groups(&ctx, &layouts, &buffers);
+        let tw_bind_groups: Vec<wgpu::BindGroup> =
+            Self::build_tw_bind_groups(&ctx, &layouts, &buffers);
+
+        // Used for blocking the async readback for sync trait methods
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all() // Enable time and IO drivers, needed for async GPU readback
+            .build()
+            .map_err(|e| {
+                PredictiveCodingError::validation(format!(
+                    "failed to create tokio runtime for GPU readback: {e}"
+                ))
+            })?;
+
+        Ok(Self {
+            ctx,
+            config: snapshot.config.clone(),
+            buffers,
+            layouts,
+            pipelines,
+            pe_bind_groups,
+            tw_bind_groups,
+            rt,
+        })
+    }
+
+    /// Blocking wrapper around [`from_snapshot_async`].
+    pub fn from_snapshot(snapshot: &ModelSnapshot) -> Result<Self> {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| {
+                PredictiveCodingError::validation(format!("tokio runtime creation failed: {e}"))
+            })?;
+        rt.block_on(Self::from_snapshot_async(snapshot))
+    }
+
+    /// Build predict/error bind groups - one per adjacent layer pair.
+    fn build_pe_bind_groups(
+        ctx: &Arc<GpuContext>,
+        layouts: &PcBindGroupLayouts,
+        buffers: &ModelBuffers,
+    ) -> Vec<wgpu::BindGroup> {
+        let n: usize = buffers.layers.len();
+        let mut groups: Vec<wgpu::BindGroup> = Vec::with_capacity(n.saturating_sub(1));
+        for i in 0..n.saturating_sub(1) {
+            let label: String = format!("pe_pair_{i}_{}", i + 1);
+            groups.push(create_predict_error_bind_group(
+                ctx,
+                layouts,
+                &buffers.layers[i + 1],
+                &buffers.layers[i],
+                &buffers.params,
+                &label,
+            ));
+        }
+        groups
+    }
+
+    /// Build timestep/weight-update bind groups - one per layer.
+    ///
+    /// `tw_bind_groups[i]` treats `layer[i]` as the "upper" layer.
+    /// For layer 0 (no lower layer), we bind its own errors buffer as
+    /// `lower_errors`; the kernel will produce rhs=0 because weight_rows==0.
+    /// For layers 1..N, `lower_errors` comes from `layer[i-1]`.
+    fn build_tw_bind_groups(
+        ctx: &Arc<GpuContext>,
+        layouts: &PcBindGroupLayouts,
+        buffers: &ModelBuffers,
+    ) -> Vec<wgpu::BindGroup> {
+        let n: usize = buffers.layers.len();
+        let mut groups: Vec<wgpu::BindGroup> = Vec::with_capacity(n);
+        for i in 0..n {
+            let lower_errors_buf = if i == 0 {
+                &buffers.dummy_lower_errors
+            } else {
+                &buffers.layers[i - 1].errors
+            };
+            let label: String = format!("tw_layer_{i}");
+            groups.push(create_timestep_weight_bind_group(
+                ctx,
+                layouts,
+                &buffers.layers[i],
+                lower_errors_buf,
+                &buffers.params,
+                &label,
+            ));
+        }
+        groups
+    }
+
+    // -------------------------------------------------------------------
+    // Dispatch helpers
+    // -------------------------------------------------------------------
+
+    /// Dispatch the prediction kernel for every adjacent layer pair (top-down).
+    fn dispatch_predictions(&self) {
+        let mut encoder = self
+            .ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("predict_encoder"),
+            });
+
+        // Iterate top-down: from the highest pair to the lowest.
+        for i in (0..self.pe_bind_groups.len()).rev() {
+            let lower_size = self.buffers.layers[i].size as u32;
+            let workgroups = lower_size.div_ceil(64);
+
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&self.pipelines.predict);
+            pass.set_bind_group(0, &self.pe_bind_groups[i], &[]);
+            pass.dispatch_workgroups(workgroups, 1, 1);
+        }
+
+        self.ctx.queue.submit(std::iter::once(encoder.finish()));
+    }
+
+    /// Dispatch the error kernel for every layer.
+    ///
+    /// Layers 0..N-2 use the pair bind groups on the GPU. The top layer has no
+    /// layer above it, so we compute its errors (`values - predictions`) via a
+    /// CPU round-trip (download values & predictions, compute, upload).
+    fn dispatch_errors(&self) {
+        let mut encoder = self
+            .ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("errors_encoder"),
+            });
+
+        for (i, bg) in self.pe_bind_groups.iter().enumerate() {
+            let lower_size = self.buffers.layers[i].size as u32;
+            let workgroups = lower_size.div_ceil(64);
+
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&self.pipelines.errors);
+            pass.set_bind_group(0, bg, &[]);
+            // Note that this does NOT submit immediately, they're being bundled up here
+            pass.dispatch_workgroups(workgroups, 1, 1);
+        }
+
+        // And actually moved to the GPU here, in a single move.
+        self.ctx.queue.submit(std::iter::once(encoder.finish()));
+
+        // Top layer: errors = values - predictions.
+        // Computed on CPU because it's simple, fast, and avoids needing a special GPU kernel for the top layer.
+        // TODO: This needs to be implemented in a GPU kernel. Make a small dedicated kernel for the top layer.
+        let top = self.buffers.layers.last().unwrap();
+        let values = self
+            .rt
+            .block_on(ModelBuffers::download_values(&self.ctx, top))
+            .unwrap();
+        let preds = self
+            .rt
+            .block_on(ModelBuffers::download_predictions(&self.ctx, top))
+            .unwrap();
+        let errors: Vec<f32> = values
+            .iter()
+            .zip(preds.iter())
+            .map(|(v, p)| v - p)
+            .collect();
+        self.ctx
+            .queue
+            .write_buffer(&top.errors, 0, bytemuck::cast_slice(&errors));
+    }
+
+    /// Dispatch the timestep kernel for every layer.
+    ///
+    /// Layer 0 uses the bottom self-bind-group.  Layers 1..N use `bind_groups[i-1]`
+    /// which has upper=layer[i], lower=layer[i-1].
+    ///
+    /// Two passes:
+    ///   1. compute_gain_errors: precompute f'(W·x) ⊙ lower_errors per row
+    ///   2. values_timestep: use precomputed gain_errors to update values
+    ///
+    /// All layers are independent within each pass, so they are batched in a
+    /// single command encoder per pass.
+    fn dispatch_timestep(&self) {
+        // Pass 1: compute gain_errors for all layers
+        let mut encoder = self
+            .ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("gain_errors_encoder"),
+            });
+
+        for (i, bg) in self.tw_bind_groups.iter().enumerate() {
+            let weight_rows = self.buffers.layers[i].weight_rows as u32;
+            if weight_rows == 0 {
+                continue;
+            }
+            let workgroups = weight_rows.div_ceil(64);
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&self.pipelines.compute_gain_errors);
+            pass.set_bind_group(0, bg, &[]);
+            pass.dispatch_workgroups(workgroups, 1, 1);
+        }
+
+        self.ctx.queue.submit(std::iter::once(encoder.finish()));
+
+        // Pass 2: values_timestep using precomputed gain_errors
+        let mut encoder = self
+            .ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("timestep_encoder"),
+            });
+
+        for (i, bg) in self.tw_bind_groups.iter().enumerate() {
+            let size = self.buffers.layers[i].size as u32;
+            let workgroups = size.div_ceil(64);
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&self.pipelines.timestep);
+            pass.set_bind_group(0, bg, &[]);
+            pass.dispatch_workgroups(workgroups, 1, 1);
+        }
+
+        self.ctx.queue.submit(std::iter::once(encoder.finish()));
+    }
+
+    /// Download `value_changes` from all layers and return the mean absolute
+    /// value change (same metric as the CPU backend).
+    fn read_total_value_change(&self) -> Result<f32> {
+        let mut total: f32 = 0.0;
+        let mut total_nodes: usize = 0;
+        for lb in &self.buffers.layers {
+            let changes = self
+                .rt
+                // TODO: Rather than downloading every value of every layer, this should have a GPU kernel to do a parallel reduction and return just the total change. This is a lot of data to move for just a single scalar.
+                .block_on(ModelBuffers::download_value_changes(&self.ctx, lb))?;
+            total += changes.iter().sum::<f32>();
+            total_nodes += lb.size;
+        }
+        Ok(total / total_nodes as f32)
+    }
+
+    /// Dispatch the weight-update kernel for every layer pair (three-pass).
+    ///
+    /// Pass 1: compute gain_errors (preactivation derivatives × lower errors)
+    /// Pass 2: compute deltas into a separate buffer
+    /// Pass 3: apply deltas to the weight matrix
+    fn dispatch_weight_updates(&self) {
+        // Pass 1: compute_gain_errors
+        let mut encoder = self
+            .ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("weight_gain_errors_encoder"),
+            });
+
+        for i in 1..self.tw_bind_groups.len() {
+            let lb = &self.buffers.layers[i];
+            let weight_rows = lb.weight_rows as u32;
+            if weight_rows == 0 {
+                continue;
+            }
+            let workgroups = weight_rows.div_ceil(64);
+
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&self.pipelines.compute_gain_errors);
+            pass.set_bind_group(0, &self.tw_bind_groups[i], &[]);
+            pass.dispatch_workgroups(workgroups, 1, 1);
+        }
+
+        self.ctx.queue.submit(std::iter::once(encoder.finish()));
+
+        // Pass 2: compute_weight_deltas
+        let mut encoder = self
+            .ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("weight_deltas_encoder"),
+            });
+
+        for i in 1..self.tw_bind_groups.len() {
+            let lb = &self.buffers.layers[i];
+            let total_weights = (lb.weight_rows * lb.weight_cols) as u32;
+            if total_weights == 0 {
+                continue;
+            }
+            let workgroups = total_weights.div_ceil(64);
+
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&self.pipelines.compute_weight_deltas);
+            pass.set_bind_group(0, &self.tw_bind_groups[i], &[]);
+            pass.dispatch_workgroups(workgroups, 1, 1);
+        }
+
+        self.ctx.queue.submit(std::iter::once(encoder.finish()));
+
+        // Pass 3: apply_weight_deltas
+        let mut encoder = self
+            .ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("apply_weight_deltas_encoder"),
+            });
+
+        for i in 1..self.tw_bind_groups.len() {
+            let lb = &self.buffers.layers[i];
+            let total_weights = (lb.weight_rows * lb.weight_cols) as u32;
+            if total_weights == 0 {
+                continue;
+            }
+            let workgroups = total_weights.div_ceil(64);
+
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&self.pipelines.apply_weight_deltas);
+            pass.set_bind_group(0, &self.tw_bind_groups[i], &[]);
+            pass.dispatch_workgroups(workgroups, 1, 1);
+        }
+
+        self.ctx.queue.submit(std::iter::once(encoder.finish()));
+    }
+
+    // -------------------------------------------------------------------
+    // Buffer upload / download helpers
+    // -------------------------------------------------------------------
+
+    /// Upload a flat f32 slice into a layer's values buffer and update the
+    /// pinned flag in the meta buffer.
+    fn upload_values(&self, layer_idx: usize, data: &[f32], pinned: bool) {
+        let lb = &self.buffers.layers[layer_idx];
+        self.ctx
+            .queue
+            .write_buffer(&lb.values, 0, bytemuck::cast_slice(data));
+        // Overwrite just the pinned flag (first u32 in meta).
+        self.ctx
+            .queue
+            .write_buffer(&lb.meta, 0, bytemuck::cast_slice(&[pinned as u32]));
+    }
+
+    /// Updates the pinned flag for a layer in the meta buffer.
+    fn set_pinned(&self, layer_idx: usize, pinned: bool) {
+        let lb = &self.buffers.layers[layer_idx];
+        self.ctx
+            .queue
+            .write_buffer(&lb.meta, 0, bytemuck::cast_slice(&[pinned as u32]));
+    }
+
+    fn download_layer_values(&self, layer_idx: usize) -> Result<Vec<f32>> {
+        let lb = &self.buffers.layers[layer_idx];
+        self.rt
+            .block_on(ModelBuffers::download_values(&self.ctx, lb))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ModelRuntime trait implementation
+// ---------------------------------------------------------------------------
+
+impl ModelRuntime for GpuModelRuntime {
+    fn backend(&self) -> ExecutionBackend {
+        ExecutionBackend::Gpu
+    }
+
+    fn config(&self) -> PredictiveCodingModelConfig {
+        self.config.clone()
+    }
+
+    fn layer_sizes(&self) -> Vec<usize> {
+        self.config.layer_sizes.clone()
+    }
+
+    /// Download the current model snapshot from the GPU.
+    /// This involves a full readback of all layer buffers, so can be slow.
+    fn snapshot(&mut self) -> Result<ModelSnapshot> {
+        let mut layers = Vec::with_capacity(self.buffers.layers.len());
+
+        for lb in self.buffers.layers.iter() {
+            let values = self
+                .rt
+                .block_on(ModelBuffers::download_values(&self.ctx, lb))?;
+            let errors = self
+                .rt
+                .block_on(ModelBuffers::download_errors(&self.ctx, lb))?;
+            let weights = self
+                .rt
+                .block_on(ModelBuffers::download_weights(&self.ctx, lb))?;
+            let predictions = self
+                .rt
+                .block_on(ModelBuffers::download_predictions(&self.ctx, lb))?;
+            let meta = self
+                .rt
+                .block_on(ModelBuffers::download_meta(&self.ctx, lb))?;
+
+            let pinned: bool = meta[0] != 0;
+            let activation_function: crate::model::maths::ActivationFunction =
+                activation_function_from_u32(meta[1])?;
+
+            layers.push(LayerSnapshot {
+                values,
+                predictions,
+                errors,
+                weights,
+                weight_rows: lb.weight_rows,
+                weight_cols: lb.weight_cols,
+                pinned,
+                activation_function,
+                size: lb.size,
+            });
+        }
+
+        Ok(ModelSnapshot {
+            config: self.config.clone(),
+            layers,
+        })
+    }
+
+    fn set_input(&mut self, input_values: &[f32]) -> Result<()> {
+        let expected = self.config.layer_sizes[0];
+        if input_values.len() != expected {
+            return Err(PredictiveCodingError::validation(format!(
+                "input length {} does not match expected size {expected}",
+                input_values.len()
+            )));
+        }
+        self.upload_values(0, input_values, true);
+        Ok(())
+    }
+
+    fn set_output(&mut self, output_values: &[f32]) -> Result<()> {
+        let last = self.config.layer_sizes.len() - 1;
+        let expected = self.config.layer_sizes[last];
+        if output_values.len() != expected {
+            return Err(PredictiveCodingError::validation(format!(
+                "output length {} does not match expected size {expected}",
+                output_values.len()
+            )));
+        }
+        self.upload_values(last, output_values, true);
+        Ok(())
+    }
+
+    fn pin_input(&mut self) -> Result<()> {
+        self.set_pinned(0, true);
+        Ok(())
+    }
+
+    fn unpin_input(&mut self) -> Result<()> {
+        self.set_pinned(0, false);
+        Ok(())
+    }
+
+    fn pin_output(&mut self) -> Result<()> {
+        let last = self.buffers.layers.len() - 1;
+        self.set_pinned(last, true);
+        Ok(())
+    }
+
+    fn unpin_output(&mut self) -> Result<()> {
+        let last = self.buffers.layers.len() - 1;
+        self.set_pinned(last, false);
+        Ok(())
+    }
+
+    fn reinitialise_latents(&mut self) -> Result<()> {
+        // Re-upload random values for interior layers (skip first and last).
+        let mut rng = rand::rng();
+        for i in 1..self.buffers.layers.len() - 1 {
+            let size = self.buffers.layers[i].size;
+            let data: Vec<f32> = (0..size)
+                .map(|_| rand::RngExt::random_range(&mut rng, 0.0..1.0))
+                .collect();
+            self.upload_values(i, &data, false);
+        }
+        Ok(())
+    }
+
+    fn compute_predictions_and_errors(&mut self) -> Result<()> {
+        self.dispatch_predictions();
+        self.dispatch_errors();
+        Ok(())
+    }
+
+    fn timestep(&mut self) -> Result<f32> {
+        self.dispatch_timestep();
+        self.read_total_value_change()
+    }
+
+    fn converge_values(&mut self) -> Result<u32> {
+        let mut convergence_count: u32 = 0;
+
+        while convergence_count < self.config.convergence_steps {
+            self.dispatch_predictions();
+            self.dispatch_errors();
+            self.dispatch_timestep();
+
+            let mean_change = self.read_total_value_change()?;
+            convergence_count += 1;
+
+            if mean_change.abs() < self.config.convergence_threshold {
+                break;
+            }
+        }
+
+        Ok(convergence_count)
+    }
+
+    fn total_error(&mut self) -> Result<f32> {
+        let mut total: f32 = 0.0;
+        for lb in &self.buffers.layers {
+            let errs = self
+                .rt
+                // TODO: This needs to have a GPU kernel, so we don't need to download every layer.
+                .block_on(ModelBuffers::download_errors(&self.ctx, lb))?;
+            total += errs.iter().sum::<f32>();
+        }
+        Ok(total)
+    }
+
+    fn total_energy(&mut self) -> Result<f32> {
+        let mut total: f32 = 0.0;
+        for lb in &self.buffers.layers {
+            let errs = self
+                .rt
+                // TODO: This needs to have a GPU kernel, so we don't need to download every layer.
+                .block_on(ModelBuffers::download_errors(&self.ctx, lb))?;
+            total += errs.iter().map(|e| e * e).sum::<f32>();
+        }
+        Ok(0.5 * total)
+    }
+
+    fn input_values(&mut self) -> Result<Vec<f32>> {
+        self.download_layer_values(0)
+    }
+
+    fn output_values(&mut self) -> Result<Vec<f32>> {
+        let last = self.buffers.layers.len() - 1;
+        self.download_layer_values(last)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// TrainableModelRuntime trait implementation
+// ---------------------------------------------------------------------------
+
+impl TrainableModelRuntime for GpuModelRuntime {
+    fn compute_weight_updates(&mut self) -> Result<WeightUpdateSet> {
+        // For minibatch support we need the delta_W *without* applying it.
+        // For now, I'm doing this on the CPU but I need to write a new kernel to do it on the GPU without needing a readback
+        // However, this placeholder will serve for now.
+        // TODO: Implement this on the GPU.
+
+        // Download the necessary data and compute on CPU.
+        let n = self.buffers.layers.len();
+        let mut updates: Vec<Vec<f32>> = Vec::with_capacity(n.saturating_sub(1));
+        let mut shapes: Vec<(usize, usize)> = Vec::with_capacity(n.saturating_sub(1));
+
+        // Pre-download all layer data we need.
+        let mut all_values: Vec<Vec<f32>> = Vec::with_capacity(n);
+        let mut all_errors: Vec<Vec<f32>> = Vec::with_capacity(n);
+        let mut all_weights: Vec<Vec<f32>> = Vec::with_capacity(n);
+        for lb in &self.buffers.layers {
+            all_values.push(
+                self.rt
+                    .block_on(ModelBuffers::download_values(&self.ctx, lb))?,
+            );
+            all_errors.push(
+                self.rt
+                    .block_on(ModelBuffers::download_errors(&self.ctx, lb))?,
+            );
+            all_weights.push(
+                self.rt
+                    .block_on(ModelBuffers::download_weights(&self.ctx, lb))?,
+            );
+        }
+
+        let alpha = self.config.alpha;
+
+        for i in 0..n.saturating_sub(1) {
+            let upper_idx = i + 1;
+            let lower_idx = i;
+            let upper_size = self.buffers.layers[upper_idx].size;
+            let lower_size = self.buffers.layers[lower_idx].size;
+
+            let upper_values = &all_values[upper_idx];
+            let upper_weights = &all_weights[upper_idx];
+            let lower_errors = &all_errors[lower_idx];
+
+            let act_fn = self.config.activation_function;
+
+            let mut delta = vec![0.0_f32; lower_size * upper_size];
+            for row in 0..lower_size {
+                // preactivation[row] = sum_k W[row][k] * upper_values[k]
+                let mut preact: f32 = 0.0;
+                for k in 0..upper_size {
+                    preact += upper_weights[row * upper_size + k] * upper_values[k];
+                }
+                let gain_error = act_fn.derivative(preact) * lower_errors[row];
+                for col in 0..upper_size {
+                    delta[row * upper_size + col] = alpha * gain_error * upper_values[col];
+                }
+            }
+
+            shapes.push((lower_size, upper_size));
+            updates.push(delta);
+        }
+
+        Ok(WeightUpdateSet { updates, shapes })
+    }
+
+    fn apply_weight_updates(&mut self, updates: &WeightUpdateSet) -> Result<()> {
+        // Download current weights, add deltas, re-upload.
+        // TODO: This should have a GPU kernel to do this in-place.
+        for (i, delta) in updates.updates.iter().enumerate() {
+            let layer_idx = i + 1;
+            let lb = &self.buffers.layers[layer_idx];
+            let mut weights = self
+                .rt
+                .block_on(ModelBuffers::download_weights(&self.ctx, lb))?;
+            for (w, d) in weights.iter_mut().zip(delta.iter()) {
+                *w += d;
+            }
+            self.ctx
+                .queue
+                .write_buffer(&lb.weights, 0, bytemuck::cast_slice(&weights));
+        }
+        Ok(())
+    }
+
+    /// Override to run the full weight update on the GPU without a round-trip.
+    fn update_weights(&mut self) -> Result<()> {
+        self.dispatch_weight_updates();
+        Ok(())
+    }
+}

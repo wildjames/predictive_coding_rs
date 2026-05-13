@@ -28,7 +28,8 @@
         "hastur-dev.cargo-fl",
         "JScearcy.rust-doc-viewer",
         "bierner.github-markdown-preview",
-        "PolyMeilex.wgsl"
+        "PolyMeilex.wgsl",
+        "Gruntfuggly.todo-tree"
       ],
       "settings": {
         "editor.formatOnPaste": false,

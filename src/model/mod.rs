@@ -10,6 +10,11 @@ pub use runtime::{ExecutionBackend, ModelRuntime, TrainableModelRuntime, WeightU
 mod cpu;
 pub use cpu::CpuModelRuntime;
 
+#[cfg(feature = "gpu")]
+pub mod gpu;
+#[cfg(feature = "gpu")]
+pub use gpu::GpuModelRuntime;
+
 mod model_structure;
 pub use model_structure::{Layer, PredictiveCodingModel, PredictiveCodingModelConfig};
 
