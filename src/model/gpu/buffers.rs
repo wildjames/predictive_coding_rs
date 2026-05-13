@@ -42,6 +42,18 @@ pub fn activation_to_u32(af: crate::model::maths::ActivationFunction) -> u32 {
     }
 }
 
+pub fn activation_function_from_u32(id: u32) -> Result<crate::model::maths::ActivationFunction> {
+    use crate::model::maths::ActivationFunction;
+    match id {
+        ACTIVATION_RELU => Ok(ActivationFunction::Relu),
+        ACTIVATION_SIGMOID => Ok(ActivationFunction::Sigmoid),
+        ACTIVATION_TANH => Ok(ActivationFunction::Tanh),
+        _ => Err(crate::error::PredictiveCodingError::validation(format!(
+            "invalid activation function ID in GPU meta buffer: {id}"
+        ))),
+    }
+}
+
 const BUF_USAGE: wgpu::BufferUsages = wgpu::BufferUsages::STORAGE
     .union(wgpu::BufferUsages::COPY_SRC)
     .union(wgpu::BufferUsages::COPY_DST);
@@ -223,19 +235,29 @@ impl ModelBuffers {
     ) -> Result<Vec<f32>> {
         read_buffer_f32(ctx, &layer_buf.value_changes, layer_buf.size).await
     }
+
+    /// Read back the `meta` buffer from a single layer, returning the raw u32 values.
+    pub async fn download_meta(
+        ctx: &Arc<GpuContext>,
+        layer_buf: &LayerBuffers,
+    ) -> Result<Vec<u32>> {
+        read_buffer_u32(ctx, &layer_buf.meta, 6).await
+    }
 }
 
-/// Helper: download `count` f32s from a GPU buffer to the CPU.
-async fn read_buffer_f32(
+async fn read_buffer_t<T>(
     ctx: &Arc<GpuContext>,
     buffer: &wgpu::Buffer,
     count: usize,
-) -> Result<Vec<f32>> {
+) -> Result<Vec<T>>
+where
+    T: bytemuck::Pod,
+{
     if count == 0 {
         return Ok(Vec::new());
     }
 
-    let byte_len = (count * std::mem::size_of::<f32>()) as u64;
+    let byte_len = (count * std::mem::size_of::<T>()) as u64;
 
     let staging = ctx.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("staging_read"),
@@ -268,9 +290,29 @@ async fn read_buffer_f32(
         })?;
 
     let view = staging.get_mapped_range(..);
-    let data: Vec<f32> = bytemuck::cast_slice(&view).to_vec();
+    let data: Vec<T> = bytemuck::cast_slice(&view).to_vec();
     drop(view);
     staging.unmap();
 
     Ok(data)
+}
+
+/// Helper: download `count` f32s from a GPU buffer to the CPU.
+async fn read_buffer_f32(
+    ctx: &Arc<GpuContext>,
+    buffer: &wgpu::Buffer,
+    count: usize,
+) -> Result<Vec<f32>> {
+    let promise: Result<Vec<f32>> = read_buffer_t(ctx, buffer, count).await;
+    promise
+}
+
+/// Helper: download `count` u32s from a GPU buffer to the CPU.
+async fn read_buffer_u32(
+    ctx: &Arc<GpuContext>,
+    buffer: &wgpu::Buffer,
+    count: usize,
+) -> Result<Vec<u32>> {
+    let promise: Result<Vec<u32>> = read_buffer_t(ctx, buffer, count).await;
+    promise
 }

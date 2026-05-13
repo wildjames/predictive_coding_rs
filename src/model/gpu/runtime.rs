@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::error::{PredictiveCodingError, Result};
+use crate::model::gpu::buffers::activation_function_from_u32;
 use crate::model::{
     ExecutionBackend, ModelRuntime, ModelSnapshot, PredictiveCodingModelConfig,
     TrainableModelRuntime, WeightUpdateSet, snapshot::LayerSnapshot,
@@ -345,7 +346,7 @@ impl ModelRuntime for GpuModelRuntime {
     fn snapshot(&mut self) -> Result<ModelSnapshot> {
         let mut layers = Vec::with_capacity(self.buffers.layers.len());
 
-        for (i, lb) in self.buffers.layers.iter().enumerate() {
+        for lb in self.buffers.layers.iter() {
             let values = self
                 .rt
                 .block_on(ModelBuffers::download_values(&self.ctx, lb))?;
@@ -358,6 +359,13 @@ impl ModelRuntime for GpuModelRuntime {
             let predictions = self
                 .rt
                 .block_on(ModelBuffers::download_predictions(&self.ctx, lb))?;
+            let meta = self
+                .rt
+                .block_on(ModelBuffers::download_meta(&self.ctx, lb))?;
+
+            let pinned: bool = meta[0] != 0;
+            let activation_function: crate::model::maths::ActivationFunction =
+                activation_function_from_u32(meta[1])?;
 
             layers.push(LayerSnapshot {
                 values,
@@ -366,8 +374,8 @@ impl ModelRuntime for GpuModelRuntime {
                 weights,
                 weight_rows: lb.weight_rows,
                 weight_cols: lb.weight_cols,
-                pinned: i == 0 || i == self.buffers.layers.len() - 1,
-                activation_function: self.config.activation_function,
+                pinned,
+                activation_function,
                 size: lb.size,
             });
         }
