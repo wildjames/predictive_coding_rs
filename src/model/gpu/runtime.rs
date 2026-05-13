@@ -222,9 +222,36 @@ impl GpuModelRuntime {
     /// Layer 0 uses the bottom self-bind-group.  Layers 1..N use `bind_groups[i-1]`
     /// which has upper=layer[i], lower=layer[i-1].
     ///
-    /// All dispatches are independent (no inter-layer data dependency within a
-    /// single timestep) so they are batched in a single command encoder.
+    /// Two passes:
+    ///   1. compute_gain_errors: precompute f'(W·x) ⊙ lower_errors per row
+    ///   2. values_timestep: use precomputed gain_errors to update values
+    ///
+    /// All layers are independent within each pass, so they are batched in a
+    /// single command encoder per pass.
     fn dispatch_timestep(&self) {
+        // Pass 1: compute gain_errors for all layers
+        let mut encoder = self
+            .ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("gain_errors_encoder"),
+            });
+
+        for (i, bg) in self.tw_bind_groups.iter().enumerate() {
+            let weight_rows = self.buffers.layers[i].weight_rows as u32;
+            if weight_rows == 0 {
+                continue;
+            }
+            let workgroups = weight_rows.div_ceil(64);
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&self.pipelines.compute_gain_errors);
+            pass.set_bind_group(0, bg, &[]);
+            pass.dispatch_workgroups(workgroups, 1, 1);
+        }
+
+        self.ctx.queue.submit(std::iter::once(encoder.finish()));
+
+        // Pass 2: values_timestep using precomputed gain_errors
         let mut encoder = self
             .ctx
             .device
@@ -238,11 +265,9 @@ impl GpuModelRuntime {
             let mut pass = encoder.begin_compute_pass(&Default::default());
             pass.set_pipeline(&self.pipelines.timestep);
             pass.set_bind_group(0, bg, &[]);
-            // Again note that this does NOT submit immediately, they're being bundled up here
             pass.dispatch_workgroups(workgroups, 1, 1);
         }
 
-        // And moved the the GPU here
         self.ctx.queue.submit(std::iter::once(encoder.finish()));
     }
 
@@ -262,12 +287,37 @@ impl GpuModelRuntime {
         Ok(total / total_nodes as f32)
     }
 
-    /// Dispatch the weight-update kernel for every layer pair (two-pass).
+    /// Dispatch the weight-update kernel for every layer pair (three-pass).
     ///
-    /// Pass 1: compute deltas into a separate buffer
-    /// Pass 2: apply deltas to the weight matrix
+    /// Pass 1: compute gain_errors (preactivation derivatives × lower errors)
+    /// Pass 2: compute deltas into a separate buffer
+    /// Pass 3: apply deltas to the weight matrix
     fn dispatch_weight_updates(&self) {
-        // Pass 1
+        // Pass 1: compute_gain_errors
+        let mut encoder = self
+            .ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("weight_gain_errors_encoder"),
+            });
+
+        for i in 1..self.tw_bind_groups.len() {
+            let lb = &self.buffers.layers[i];
+            let weight_rows = lb.weight_rows as u32;
+            if weight_rows == 0 {
+                continue;
+            }
+            let workgroups = weight_rows.div_ceil(64);
+
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&self.pipelines.compute_gain_errors);
+            pass.set_bind_group(0, &self.tw_bind_groups[i], &[]);
+            pass.dispatch_workgroups(workgroups, 1, 1);
+        }
+
+        self.ctx.queue.submit(std::iter::once(encoder.finish()));
+
+        // Pass 2: compute_weight_deltas
         let mut encoder = self
             .ctx
             .device
@@ -275,7 +325,6 @@ impl GpuModelRuntime {
                 label: Some("weight_deltas_encoder"),
             });
 
-        // Skip layer 0 (no weights to update).
         for i in 1..self.tw_bind_groups.len() {
             let lb = &self.buffers.layers[i];
             let total_weights = (lb.weight_rows * lb.weight_cols) as u32;
@@ -292,7 +341,7 @@ impl GpuModelRuntime {
 
         self.ctx.queue.submit(std::iter::once(encoder.finish()));
 
-        // Pass 2
+        // Pass 3: apply_weight_deltas
         let mut encoder = self
             .ctx
             .device

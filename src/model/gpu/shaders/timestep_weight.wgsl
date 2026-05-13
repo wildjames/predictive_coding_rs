@@ -2,14 +2,15 @@
 // Predictive-coding compute shaders — timestep & weight-update kernels
 //
 // Buffer layout (matches layout.rs PcBindGroupLayouts::timestep_weight):
-//   @group(0) @binding(0)  upper_values         : array<f32>  (rw)
-//   @group(0) @binding(1)  upper_weights        : array<f32>  (rw)
-//   @group(0) @binding(2)  upper_meta           : array<u32>  (read)  [pinned, activation_fn, size, weight_rows, weight_cols, is_top_level]
-//   @group(0) @binding(3)  upper_errors         : array<f32>  (rw)
-//   @group(0) @binding(4)  upper_value_changes  : array<f32>  (rw)
-//   @group(0) @binding(5)  lower_errors         : array<f32>  (read)
-//   @group(0) @binding(6)  params               : vec4<f32>   (uniform) [alpha, gamma, conv_thresh, conv_steps]
-//   @group(0) @binding(7)  weight_deltas        : array<f32>  (rw)
+//   @group(0) @binding(0)  params               : vec4<f32>   (uniform) [alpha, gamma, conv_thresh, conv_steps]
+//   @group(0) @binding(1)  weight_deltas        : array<f32>  (rw)
+//   @group(0) @binding(2)  gain_errors          : array<f32>  (rw)
+//   @group(0) @binding(3)  upper_meta           : array<u32>  (read)  [pinned, activation_fn, size, weight_rows, weight_cols, is_top_level]
+//   @group(0) @binding(4)  upper_values         : array<f32>  (rw)
+//   @group(0) @binding(5)  upper_weights        : array<f32>  (rw)
+//   @group(0) @binding(6)  upper_errors         : array<f32>  (rw)
+//   @group(0) @binding(7)  upper_value_changes  : array<f32>  (rw)
+//   @group(0) @binding(8)  lower_errors         : array<f32>  (read)
 // ---------------------------------------------------------------------------
 
 // Activation function IDs (must match buffers::ACTIVATION_* constants)
@@ -19,14 +20,15 @@ const ACTIVATION_TANH: u32    = 2u;
 
 // ---- bindings -------------------------------------------------------------
 
-@group(0) @binding(0) var<storage, read_write> upper_values         : array<f32>;
-@group(0) @binding(1) var<storage, read_write> upper_weights        : array<f32>;
-@group(0) @binding(2) var<storage, read>       upper_meta           : array<u32>;
-@group(0) @binding(3) var<storage, read_write> upper_errors         : array<f32>;
-@group(0) @binding(4) var<storage, read_write> upper_value_changes  : array<f32>;
-@group(0) @binding(5) var<storage, read>       lower_errors         : array<f32>;
-@group(0) @binding(6) var<uniform>             params               : vec4<f32>;
-@group(0) @binding(7) var<storage, read_write> weight_deltas        : array<f32>;
+@group(0) @binding(0) var<uniform>             params               : vec4<f32>;
+@group(0) @binding(1) var<storage, read_write> weight_deltas        : array<f32>;
+@group(0) @binding(2) var<storage, read_write> gain_errors          : array<f32>;
+@group(0) @binding(3) var<storage, read>       upper_meta           : array<u32>;
+@group(0) @binding(4) var<storage, read_write> upper_values         : array<f32>;
+@group(0) @binding(5) var<storage, read_write> upper_weights        : array<f32>;
+@group(0) @binding(6) var<storage, read_write> upper_errors         : array<f32>;
+@group(0) @binding(7) var<storage, read_write> upper_value_changes  : array<f32>;
+@group(0) @binding(8) var<storage, read>       lower_errors         : array<f32>;
 
 // ---- helpers --------------------------------------------------------------
 
@@ -55,6 +57,31 @@ fn weight_index(row: u32, col: u32, num_cols: u32) -> u32 {
 
 // ---- kernels --------------------------------------------------------------
 
+/// Precompute gain_error[i] = f'(W[i,:] · upper_values) * lower_errors[i]
+/// for each row i of the weight matrix.
+///
+/// Must be dispatched BEFORE values_timestep and compute_weight_deltas.
+/// One thread per weight row (i.e., per lower-layer node).
+@compute @workgroup_size(64)
+fn compute_gain_errors(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let weight_rows = upper_meta[3];
+    let weight_cols = upper_meta[4];
+    let i = gid.x;
+
+    if i >= weight_rows {
+        return;
+    }
+
+    let act_fn = upper_meta[1];
+
+    var preact: f32 = 0.0;
+    for (var k: u32 = 0u; k < weight_cols; k = k + 1u) {
+        preact += upper_weights[weight_index(i, k, weight_cols)] * upper_values[k];
+    }
+
+    gain_errors[i] = activation_derivative(preact, act_fn) * lower_errors[i];
+}
+
 /// Update the **upper** layer's node values.
 ///
 /// For non-top layers:
@@ -62,9 +89,9 @@ fn weight_index(row: u32, col: u32, num_cols: u32) -> u32 {
 /// For the top layer:
 ///   value_change[j] = rhs[j] * gamma
 ///
-/// where rhs[j] = sum_i  W[i][j] * f'(preact[i]) * lower_errors[i]
-///       preact[i] = sum_k W[i][k] * upper_values[k]
+/// where rhs[j] = sum_i  W[i][j] * gain_errors[i]
 ///
+/// Requires compute_gain_errors to have been dispatched first.
 /// If the layer has no weights (layer 0 bottom self-group, weight_rows==0),
 /// rhs is zero.
 ///
@@ -91,19 +118,13 @@ fn values_timestep(@builtin(global_invocation_id) gid: vec3<u32>) {
     let is_top      = upper_meta[5];
     let weight_rows = upper_meta[3]; // == lower_size
     let weight_cols = upper_meta[4]; // == upper_size
-    let act_fn      = upper_meta[1];
 
-    // rhs[j] = W^T · (f'(W·x) ⊙ lower_errors)  evaluated at column j
-    //        = sum_i W[i][j] * f'(dot(W[i,:], x)) * lower_errors[i]
+    // rhs[j] = W^T · gain_errors  evaluated at column j
+    //        = sum_i W[i][j] * gain_errors[i]
     var rhs: f32 = 0.0;
     if weight_rows > 0u {
         for (var i: u32 = 0u; i < weight_rows; i = i + 1u) {
-            var preact: f32 = 0.0;
-            for (var k: u32 = 0u; k < weight_cols; k = k + 1u) {
-                preact += upper_weights[weight_index(i, k, weight_cols)] * upper_values[k];
-            }
-            let gain_error = activation_derivative(preact, act_fn) * lower_errors[i];
-            rhs += upper_weights[weight_index(i, idx, weight_cols)] * gain_error;
+            rhs += upper_weights[weight_index(i, idx, weight_cols)] * gain_errors[i];
         }
     }
 
@@ -120,8 +141,9 @@ fn values_timestep(@builtin(global_invocation_id) gid: vec3<u32>) {
 
 /// Compute weight deltas into a separate buffer (no race on upper_weights).
 ///
-/// delta_W[i][j] = alpha * f'(preact[i]) * lower_errors[i] * upper_values[j]
+/// delta_W[i][j] = alpha * gain_errors[i] * upper_values[j]
 ///
+/// Requires compute_gain_errors to have been dispatched first.
 /// One thread per weight element.
 @compute @workgroup_size(64)
 fn compute_weight_deltas(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -137,16 +159,8 @@ fn compute_weight_deltas(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = flat_idx / weight_cols; // row (lower node index)
     let j = flat_idx % weight_cols; // col (upper node index)
 
-    let alpha  = params.x;
-    let act_fn = upper_meta[1];
-
-    var preact: f32 = 0.0;
-    for (var k: u32 = 0u; k < weight_cols; k = k + 1u) {
-        preact += upper_weights[weight_index(i, k, weight_cols)] * upper_values[k];
-    }
-
-    let gain_error = activation_derivative(preact, act_fn) * lower_errors[i];
-    let delta = alpha * gain_error * upper_values[j];
+    let alpha = params.x;
+    let delta = alpha * gain_errors[i] * upper_values[j];
 
     weight_deltas[flat_idx] = delta;
 }

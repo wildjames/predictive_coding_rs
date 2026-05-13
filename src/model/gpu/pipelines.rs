@@ -7,6 +7,7 @@ use super::{context::GpuContext, layout::PcBindGroupLayouts};
 pub struct PcPipelines {
     pub predict: wgpu::ComputePipeline,
     pub errors: wgpu::ComputePipeline,
+    pub compute_gain_errors: wgpu::ComputePipeline,
     pub timestep: wgpu::ComputePipeline,
     pub compute_weight_deltas: wgpu::ComputePipeline,
     pub apply_weight_deltas: wgpu::ComputePipeline,
@@ -66,6 +67,7 @@ impl PcPipelines {
         Self {
             predict: make_pe("compute_predictions", "predict_pipeline"),
             errors: make_pe("compute_errors", "errors_pipeline"),
+            compute_gain_errors: make_tw("compute_gain_errors", "compute_gain_errors_pipeline"),
             timestep: make_tw("values_timestep", "timestep_pipeline"),
             compute_weight_deltas: make_tw(
                 "compute_weight_deltas",

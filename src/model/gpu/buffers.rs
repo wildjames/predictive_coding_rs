@@ -22,6 +22,9 @@ pub struct LayerBuffers {
     pub weight_deltas: wgpu::Buffer,
     /// Per-node scratch buffer holding `abs(value_change)` after a timestep dispatch.
     pub value_changes: wgpu::Buffer,
+    /// Per-row scratch buffer holding precomputed `f'(W[i,:] · x) * lower_errors[i]`.
+    /// Populated by `compute_gain_errors`, consumed by `values_timestep` and `compute_weight_deltas`.
+    pub gain_errors: wgpu::Buffer,
     /// Scalar buffer: `[pinned: u32, activation_fn: u32, size: u32, weight_rows: u32, weight_cols: u32, is_top_level: u32]`
     pub meta: wgpu::Buffer,
     pub size: usize,
@@ -119,6 +122,18 @@ impl LayerBuffers {
             usage: BUF_USAGE,
         });
 
+        let gain_error_count = if layer.weight_rows == 0 {
+            1
+        } else {
+            layer.weight_rows
+        };
+        let gain_error_zeros = vec![0.0_f32; gain_error_count];
+        let gain_errors = device.create_buffer_init(&BufferInitDescriptor {
+            label: Some("layer_gain_errors"),
+            contents: bytemuck::cast_slice(&gain_error_zeros),
+            usage: BUF_USAGE,
+        });
+
         let meta_data: [u32; 6] = [
             layer.pinned as u32,
             activation_to_u32(layer.activation_function),
@@ -140,6 +155,7 @@ impl LayerBuffers {
             weights,
             weight_deltas,
             value_changes,
+            gain_errors,
             meta,
             size: layer.size,
             weight_rows: layer.weight_rows,

@@ -27,14 +27,15 @@ pub struct PcBindGroupLayouts {
 
     /// Layout for the timestep / weight-update kernels.
     ///
-    /// Binding 0: upper_values         (storage, read_write)
-    /// Binding 1: upper_weights        (storage, read_write)
-    /// Binding 2: upper_meta           (storage, read)
-    /// Binding 3: upper_errors         (storage, read_write)
-    /// Binding 4: upper_value_changes  (storage, read_write)
-    /// Binding 5: lower_errors         (storage, read)
-    /// Binding 6: params               (uniform)
-    /// Binding 7: weight_deltas        (storage, read_write)
+    /// Binding 0: params               (uniform)
+    /// Binding 1: weight_deltas        (storage, read_write)
+    /// Binding 2: gain_errors          (storage, read_write)
+    /// Binding 3: upper_meta           (storage, read)
+    /// Binding 4: upper_values         (storage, read_write)
+    /// Binding 5: upper_weights        (storage, read_write)
+    /// Binding 6: upper_errors         (storage, read_write)
+    /// Binding 7: upper_value_changes  (storage, read_write)
+    /// Binding 8: lower_errors         (storage, read)
     pub timestep_weight: wgpu::BindGroupLayout,
 }
 
@@ -61,14 +62,15 @@ impl PcBindGroupLayouts {
                 .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                     label: Some("pc_timestep_weight_layout"),
                     entries: &[
-                        storage_entry(0, false), // upper values (rw for timestep)
-                        storage_entry(1, false), // upper weights (rw for weight update)
-                        storage_entry(2, true),  // upper meta
-                        storage_entry(3, false), // upper errors (rw)
-                        storage_entry(4, false), // upper value_changes (rw)
-                        storage_entry(5, true),  // lower errors
-                        uniform_entry(6),        // params
-                        storage_entry(7, false), // weight_deltas (rw)
+                        uniform_entry(0),        // params
+                        storage_entry(1, false), // weight_deltas (rw)
+                        storage_entry(2, false), // gain_errors (rw)
+                        storage_entry(3, true),  // upper meta
+                        storage_entry(4, false), // upper values (rw for timestep)
+                        storage_entry(5, false), // upper weights (rw for weight update)
+                        storage_entry(6, false), // upper errors (rw)
+                        storage_entry(7, false), // upper value_changes (rw)
+                        storage_entry(8, true),  // lower errors
                     ],
                 });
 
@@ -172,35 +174,39 @@ pub fn create_timestep_weight_bind_group(
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: upper.values.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: upper.weights.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 2,
-                resource: upper.meta.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 3,
-                resource: upper.errors.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 4,
-                resource: upper.value_changes.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 5,
-                resource: lower_errors.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 6,
                 resource: params.as_entire_binding(),
             },
             wgpu::BindGroupEntry {
-                binding: 7,
+                binding: 1,
                 resource: upper.weight_deltas.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: upper.gain_errors.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: upper.meta.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: upper.values.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 5,
+                resource: upper.weights.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 6,
+                resource: upper.errors.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 7,
+                resource: upper.value_changes.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 8,
+                resource: lower_errors.as_entire_binding(),
             },
         ],
     })
