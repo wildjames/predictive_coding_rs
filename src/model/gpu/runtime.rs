@@ -192,29 +192,32 @@ impl GpuModelRuntime {
             pass.dispatch_workgroups(workgroups, 1, 1);
         }
 
+        // The top layer also needs to have its errors computed, but has no pair bind group.
+        // Since the error computation only touches the lower layer, we can make a special
+        // bind group that uses the top layer values as both upper and lower, and the kernel will
+        // only use the lower layer values to compute the errors.
+        let top_idx = self.buffers.layers.len() - 1;
+        let top_bg = create_predict_error_bind_group(
+            &self.ctx,
+            &self.layouts,
+            &self.buffers.layers[top_idx],
+            &self.buffers.layers[top_idx],
+            &self.buffers.params,
+            "pe_top_layer",
+        );
+        let lower_size = self.buffers.layers[top_idx].size as u32;
+        let workgroups = lower_size.div_ceil(64);
+
+        let mut pass = encoder.begin_compute_pass(&Default::default());
+        pass.set_pipeline(&self.pipelines.errors);
+        pass.set_bind_group(0, &top_bg, &[]);
+        pass.dispatch_workgroups(workgroups, 1, 1);
+
+        // pass borrowed the encoder, so drop it before submitting the command buffer
+        drop(pass);
+
         // And actually moved to the GPU here, in a single move.
         self.ctx.queue.submit(std::iter::once(encoder.finish()));
-
-        // Top layer: errors = values - predictions.
-        // Computed on CPU because it's simple, fast, and avoids needing a special GPU kernel for the top layer.
-        // TODO: This needs to be implemented in a GPU kernel. Make a small dedicated kernel for the top layer.
-        let top = self.buffers.layers.last().unwrap();
-        let values = self
-            .rt
-            .block_on(ModelBuffers::download_values(&self.ctx, top))
-            .unwrap();
-        let preds = self
-            .rt
-            .block_on(ModelBuffers::download_predictions(&self.ctx, top))
-            .unwrap();
-        let errors: Vec<f32> = values
-            .iter()
-            .zip(preds.iter())
-            .map(|(v, p)| v - p)
-            .collect();
-        self.ctx
-            .queue
-            .write_buffer(&top.errors, 0, bytemuck::cast_slice(&errors));
     }
 
     /// Dispatch the timestep kernel for every layer.
