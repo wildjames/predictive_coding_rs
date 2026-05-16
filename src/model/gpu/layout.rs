@@ -23,6 +23,7 @@ pub struct PcBindGroupLayouts {
     /// Binding 5: lower_errors     (storage, read_write)
     /// Binding 6: lower_meta       (storage, read)
     /// Binding 7: params           (uniform)
+    /// Binding 8: shared_sum       (storage, read_write)
     pub predict_error: wgpu::BindGroupLayout,
 
     /// Layout for the timestep / weight-update kernels.
@@ -54,6 +55,7 @@ impl PcBindGroupLayouts {
                     storage_entry(5, false), // lower errors
                     storage_entry(6, true),  // lower meta
                     uniform_entry(7),        // params
+                    storage_entry(8, false), // shared_sum
                 ],
             });
 
@@ -113,6 +115,7 @@ pub fn create_predict_error_bind_group(
     layouts: &PcBindGroupLayouts,
     upper: &super::buffers::LayerBuffers,
     lower: &super::buffers::LayerBuffers,
+    error_sum_buffer: &wgpu::Buffer,
     params: &wgpu::Buffer,
     label: &str,
 ) -> wgpu::BindGroup {
@@ -151,6 +154,10 @@ pub fn create_predict_error_bind_group(
             wgpu::BindGroupEntry {
                 binding: 7,
                 resource: params.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 8,
+                resource: error_sum_buffer.as_entire_binding(),
             },
         ],
     })

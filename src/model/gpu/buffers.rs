@@ -67,31 +67,37 @@ impl LayerBuffers {
     /// Upload a single layer's data onto the GPU.
     ///
     /// `is_top_level` must be set by the caller (true for the last layer).
+    /// `sum_offset` is this layer's starting index in shared buffers
     pub fn from_snapshot(
         ctx: &Arc<GpuContext>,
         layer: &crate::model::snapshot::LayerSnapshot,
         is_top_level: bool,
+        sum_offset: u32,
     ) -> Self {
         let device = &ctx.device;
 
+        // Buffer 0
         let values = device.create_buffer_init(&BufferInitDescriptor {
             label: Some("layer_values"),
             contents: bytemuck::cast_slice(&layer.values),
             usage: BUF_USAGE,
         });
 
+        // Buffer 1
         let predictions = device.create_buffer_init(&BufferInitDescriptor {
             label: Some("layer_predictions"),
             contents: bytemuck::cast_slice(&layer.predictions),
             usage: BUF_USAGE,
         });
 
+        // Buffer 2
         let errors = device.create_buffer_init(&BufferInitDescriptor {
             label: Some("layer_errors"),
             contents: bytemuck::cast_slice(&layer.errors),
             usage: BUF_USAGE,
         });
 
+        // Buffer 3
         let weights = device.create_buffer_init(&BufferInitDescriptor {
             label: Some("layer_weights"),
             // Even if weights is empty (layer 0), wgpu needs a non-zero buffer.
@@ -103,6 +109,7 @@ impl LayerBuffers {
             usage: BUF_USAGE,
         });
 
+        // Buffer 4
         let zeros = vec![0.0_f32; layer.size];
         let value_changes = device.create_buffer_init(&BufferInitDescriptor {
             label: Some("layer_value_changes"),
@@ -110,6 +117,7 @@ impl LayerBuffers {
             usage: BUF_USAGE,
         });
 
+        // Buffer 5
         let weight_delta_count = if layer.weights.is_empty() {
             1
         } else {
@@ -122,6 +130,7 @@ impl LayerBuffers {
             usage: BUF_USAGE,
         });
 
+        // Buffer 6
         let gain_error_count = if layer.weight_rows == 0 {
             1
         } else {
@@ -134,13 +143,15 @@ impl LayerBuffers {
             usage: BUF_USAGE,
         });
 
-        let meta_data: [u32; 6] = [
+        // Buffer 7
+        let meta_data: [u32; 7] = [
             layer.pinned as u32,
             activation_to_u32(layer.activation_function),
             layer.size as u32,
             layer.weight_rows as u32,
             layer.weight_cols as u32,
             is_top_level as u32,
+            sum_offset,
         ];
         let meta = device.create_buffer_init(&BufferInitDescriptor {
             label: Some("layer_meta"),
@@ -173,6 +184,12 @@ pub struct ModelBuffers {
     /// A small zeroed buffer used as `lower_errors` for layer 0's timestep
     /// bind group. Avoids aliasing layer 0's own errors buffer in two roles.
     pub dummy_lower_errors: wgpu::Buffer,
+    /// Buffer for the error reduction kernel's partial sums (one per workgroup).
+    /// Sized to fit all layers' workgroups contiguously (`total_sums` floats).
+    pub error_sum: wgpu::Buffer,
+    /// Total number of f32 slots in summing arrays, e.g. `error_sum`, equal to the sum of
+    /// `layer_size.div_ceil(64)` across all layers.
+    pub total_sums: usize,
 }
 
 impl ModelBuffers {
@@ -181,12 +198,24 @@ impl ModelBuffers {
         ctx: &Arc<GpuContext>,
         snapshot: &crate::model::snapshot::ModelSnapshot,
     ) -> Self {
-        let num_layers = snapshot.layers.len();
+        let num_layers: usize = snapshot.layers.len();
+
+        // Compute prefix-sum offsets into the shared partial_sums buffer.
+        // Layer i writes its workgroup partial sums starting at offset[i].
+        let mut offsets: Vec<u32> = Vec::with_capacity(num_layers);
+        // and running total of all workgroups across all layers, to size the shared buffer.
+        let mut running: u32 = 0;
+        for l in &snapshot.layers {
+            offsets.push(running);
+            running += (l.size as u32).div_ceil(64);
+        }
+        let total_sums = running as usize;
+
         let layers: Vec<LayerBuffers> = snapshot
             .layers
             .iter()
             .enumerate()
-            .map(|(i, l)| LayerBuffers::from_snapshot(ctx, l, i == num_layers - 1))
+            .map(|(i, l)| LayerBuffers::from_snapshot(ctx, l, i == num_layers - 1, offsets[i]))
             .collect();
 
         // Pack model-level scalars into a uniform buffer.
@@ -196,7 +225,7 @@ impl ModelBuffers {
             snapshot.config.convergence_threshold,
             snapshot.config.convergence_steps as f32,
         ];
-        let params = ctx.device.create_buffer_init(&BufferInitDescriptor {
+        let params: wgpu::Buffer = ctx.device.create_buffer_init(&BufferInitDescriptor {
             label: Some("model_params"),
             contents: bytemuck::cast_slice(&params_data),
             usage: wgpu::BufferUsages::UNIFORM
@@ -212,10 +241,21 @@ impl ModelBuffers {
         } else {
             1
         };
-        let dummy_zeros = vec![0.0_f32; dummy_size];
-        let dummy_lower_errors = ctx.device.create_buffer_init(&BufferInitDescriptor {
-            label: Some("dummy_lower_errors"),
-            contents: bytemuck::cast_slice(&dummy_zeros),
+        let dummy_zeros: Vec<f32> = vec![0.0_f32; dummy_size];
+        let dummy_lower_errors: wgpu::Buffer =
+            ctx.device.create_buffer_init(&BufferInitDescriptor {
+                label: Some("dummy_lower_errors"),
+                contents: bytemuck::cast_slice(&dummy_zeros),
+                usage: BUF_USAGE,
+            });
+
+        // Buffer for error reduction kernel partial sums (one per workgroup).
+        // Sized to hold all layers' workgroups contiguously.
+        let total_slots: usize = total_sums.max(1);
+        let error_sum_zeros: Vec<f32> = vec![0.0_f32; total_slots];
+        let error_sum: wgpu::Buffer = ctx.device.create_buffer_init(&BufferInitDescriptor {
+            label: Some("error_sum"),
+            contents: bytemuck::cast_slice(&error_sum_zeros),
             usage: BUF_USAGE,
         });
 
@@ -223,6 +263,8 @@ impl ModelBuffers {
             layers,
             params,
             dummy_lower_errors,
+            error_sum,
+            total_sums,
         }
     }
 
@@ -281,7 +323,17 @@ impl ModelBuffers {
         ctx: &Arc<GpuContext>,
         layer_buf: &LayerBuffers,
     ) -> Result<Vec<u32>> {
-        read_buffer_u32(ctx, &layer_buf.meta, 6).await
+        read_buffer_u32(ctx, &layer_buf.meta, 7).await
+    }
+
+    /// Read back all partial sums from the error reduction kernel and return
+    /// their total.  The buffer holds one slot per workgroup across all layers.
+    pub async fn download_error_sum(
+        ctx: &Arc<GpuContext>,
+        model_bufs: &ModelBuffers,
+    ) -> Result<f32> {
+        let partial = read_buffer_f32(ctx, &model_bufs.error_sum, model_bufs.total_sums).await?;
+        Ok(partial.iter().sum())
     }
 }
 

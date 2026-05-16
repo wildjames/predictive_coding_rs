@@ -4,12 +4,13 @@
 // Buffer layout (matches layout.rs PcBindGroupLayouts::predict_error):
 //   @group(0) @binding(0)  upper_values     : array<f32>  (read)
 //   @group(0) @binding(1)  upper_weights    : array<f32>  (read)   row-major (lower_size × upper_size)
-//   @group(0) @binding(2)  upper_meta       : array<u32>  (read)   [pinned, activation_fn, size, weight_rows, weight_cols, is_top_level]
+//   @group(0) @binding(2)  upper_meta       : array<u32>  (read)   [pinned, activation_fn, size, weight_rows, weight_cols, is_top_level, error_sum_offset]
 //   @group(0) @binding(3)  lower_values     : array<f32>  (read)
 //   @group(0) @binding(4)  lower_preds      : array<f32>  (rw)
 //   @group(0) @binding(5)  lower_errors     : array<f32>  (rw)
-//   @group(0) @binding(6)  lower_meta       : array<u32>  (read)   [pinned, activation_fn, size, weight_rows, weight_cols, is_top_level]
+//   @group(0) @binding(6)  lower_meta       : array<u32>  (read)   [pinned, activation_fn, size, weight_rows, weight_cols, is_top_level, error_sum_offset]
 //   @group(0) @binding(7)  params           : vec4<f32>   (uniform) [alpha, gamma, conv_thresh, conv_steps]
+//   @group(0) @binding(8)  partial_sums     : array<f32>  (rw)     per-workgroup partial sums, offset per layer
 // ---------------------------------------------------------------------------
 
 // Activation function IDs (must match buffers::ACTIVATION_* constants)
@@ -27,6 +28,11 @@ const ACTIVATION_TANH: u32    = 2u;
 @group(0) @binding(5) var<storage, read_write> lower_errors  : array<f32>;
 @group(0) @binding(6) var<storage, read>       lower_meta    : array<u32>;
 @group(0) @binding(7) var<uniform>             params        : vec4<f32>;
+@group(0) @binding(8) var<storage, read_write> partial_sums  : array<f32>;
+
+// ---- Workgroup ------------------------------------------------------------
+
+var<workgroup> shared_sum: array<f32, 64>;
 
 // ---- helpers --------------------------------------------------------------
 
@@ -94,4 +100,49 @@ fn compute_errors(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     lower_errors[idx] = lower_values[idx] - lower_preds[idx];
+}
+
+/// Gather the squared errors for this lower layer into partial sums.
+///
+/// Each workgroup reduces its 64 errors^2 into one value and writes it to
+/// `partial_sums[offset + workgroup_id]`, where `offset` comes from
+/// `lower_meta[6]`.  This lets every layer write to its own region of the
+/// shared partial_sums buffer in a single dispatch.
+@compute @workgroup_size(64)
+fn reduce_error_sq(
+    @builtin(global_invocation_id) gid: vec3<u32>,
+    @builtin(local_invocation_id) lid: vec3<u32>
+) {
+    let lower_size = lower_meta[2];
+    let offset     = lower_meta[6]; // per-layer offset into partial_sums
+    let idx        = gid.x;
+    let local_idx  = lid.x;
+
+    // If I'm in bounds, get the value. If I'm out of bounds, treat as zero
+    if idx < lower_size {
+        let e = lower_errors[idx];
+        shared_sum[local_idx] = e * e;
+    } else {
+        shared_sum[local_idx] = 0.0; // So I don't risk there being junk data in the array
+    }
+
+    // Then, wait for all threads in the workgroup to finish writing to shared_sum
+    workgroupBarrier();
+
+    // Now, thread 0 can sum up the local sums and add to the global error sum
+    // Half the stride each iteration, binary tree reduction pattern
+    // Each worker grabs one of the shared sum elements, and adds it to
+    // the element a stride away. Then, that value will be moved down again by
+    // the next iteration, until all values have arrived at shared_sum[0].
+    for (var stride: u32 = 32u; stride > 0u; stride = stride / 2u) {
+        if (local_idx < stride) {
+            shared_sum[local_idx] += shared_sum[local_idx + stride];
+        }
+        workgroupBarrier();
+    }
+
+    // Then the leader writes the partial sum to the output buffer
+    if (local_idx == 0u) {
+        partial_sums[offset + gid.x / 64u] = shared_sum[0];
+    }
 }

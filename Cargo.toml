@@ -21,7 +21,6 @@ name = "eval"
 path = "src/evaluate.rs"
 
 [features]
-# GPU support is opt-in to avoid pulling in heavy GPU dependencies for CPU-only builds.
 default = []
 gpu = ["dep:wgpu", "dep:tokio", "dep:bytemuck"]
 

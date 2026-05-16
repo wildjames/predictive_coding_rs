@@ -45,6 +45,14 @@ impl GpuModelRuntime {
     /// [`GpuModelRuntime::from_snapshot`] if you need a sync entry point.
     pub async fn from_snapshot_async(snapshot: &ModelSnapshot) -> Result<Self> {
         let ctx = GpuContext::new().await?;
+        Self::from_snapshot_with_context_async(snapshot, ctx).await
+    }
+
+    /// Like [`from_snapshot_async`] but reuses an existing [`GpuContext`].
+    pub async fn from_snapshot_with_context_async(
+        snapshot: &ModelSnapshot,
+        ctx: Arc<GpuContext>,
+    ) -> Result<Self> {
         let buffers = ModelBuffers::from_snapshot(&ctx, snapshot);
         let layouts = PcBindGroupLayouts::new(&ctx);
         let pipelines = PcPipelines::new(&ctx, &layouts);
@@ -87,6 +95,20 @@ impl GpuModelRuntime {
         rt.block_on(Self::from_snapshot_async(snapshot))
     }
 
+    /// Blocking wrapper that reuses an existing [`GpuContext`].
+    pub fn from_snapshot_with_context(
+        snapshot: &ModelSnapshot,
+        ctx: Arc<GpuContext>,
+    ) -> Result<Self> {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| {
+                PredictiveCodingError::validation(format!("tokio runtime creation failed: {e}"))
+            })?;
+        rt.block_on(Self::from_snapshot_with_context_async(snapshot, ctx))
+    }
+
     /// Build predict/error bind groups - one per adjacent layer pair.
     fn build_pe_bind_groups(
         ctx: &Arc<GpuContext>,
@@ -102,6 +124,7 @@ impl GpuModelRuntime {
                 layouts,
                 &buffers.layers[i + 1],
                 &buffers.layers[i],
+                &buffers.error_sum,
                 &buffers.params,
                 &label,
             ));
@@ -202,6 +225,7 @@ impl GpuModelRuntime {
             &self.layouts,
             &self.buffers.layers[top_idx],
             &self.buffers.layers[top_idx],
+            &self.buffers.error_sum,
             &self.buffers.params,
             "pe_top_layer",
         );
@@ -217,6 +241,54 @@ impl GpuModelRuntime {
         drop(pass);
 
         // And actually moved to the GPU here, in a single move.
+        self.ctx.queue.submit(std::iter::once(encoder.finish()));
+    }
+
+    /// Dispatch `reduce_error_sq` for every layer in a single encoder submit.
+    ///
+    /// Each layer writes to its own offset in the shared `partial_sums` buffer, so all layers can be
+    /// batched without overwriting each other.
+    fn dispatch_reduce_error_sq(&self) {
+        let mut encoder = self
+            .ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("reduce_error_sq_encoder"),
+            });
+
+        // Layers 0..N-2 via the existing pe_bind_groups.
+        for (i, bg) in self.pe_bind_groups.iter().enumerate() {
+            let lower_size = self.buffers.layers[i].size as u32;
+            let workgroups = lower_size.div_ceil(64);
+
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&self.pipelines.sum_error_sq);
+            pass.set_bind_group(0, bg, &[]);
+            pass.dispatch_workgroups(workgroups, 1, 1);
+        }
+
+        // Top layer has no pe_bind_group, create a temporary one with the
+        // top layer as both upper and lower (the shader only reads
+        // lower_errors / lower_meta).
+        let top_idx = self.buffers.layers.len() - 1;
+        let top_bg = create_predict_error_bind_group(
+            &self.ctx,
+            &self.layouts,
+            &self.buffers.layers[top_idx],
+            &self.buffers.layers[top_idx],
+            &self.buffers.error_sum,
+            &self.buffers.params,
+            "pe_top_layer_energy",
+        );
+        let top_size = self.buffers.layers[top_idx].size as u32;
+        let workgroups = top_size.div_ceil(64);
+
+        let mut pass = encoder.begin_compute_pass(&Default::default());
+        pass.set_pipeline(&self.pipelines.sum_error_sq);
+        pass.set_bind_group(0, &top_bg, &[]);
+        pass.dispatch_workgroups(workgroups, 1, 1);
+        drop(pass);
+
         self.ctx.queue.submit(std::iter::once(encoder.finish()));
     }
 
@@ -558,7 +630,6 @@ impl ModelRuntime for GpuModelRuntime {
         for lb in &self.buffers.layers {
             let errs = self
                 .rt
-                // TODO: This needs to have a GPU kernel, so we don't need to download every layer.
                 .block_on(ModelBuffers::download_errors(&self.ctx, lb))?;
             total += errs.iter().sum::<f32>();
         }
@@ -566,15 +637,14 @@ impl ModelRuntime for GpuModelRuntime {
     }
 
     fn total_energy(&mut self) -> Result<f32> {
-        let mut total: f32 = 0.0;
-        for lb in &self.buffers.layers {
-            let errs = self
-                .rt
-                // TODO: This needs to have a GPU kernel, so we don't need to download every layer.
-                .block_on(ModelBuffers::download_errors(&self.ctx, lb))?;
-            total += errs.iter().map(|e| e * e).sum::<f32>();
-        }
-        Ok(0.5 * total)
+        // Tell the GPU to gather the errors
+        self.dispatch_reduce_error_sq();
+
+        let sum_sq: f32 = self
+            .rt
+            .block_on(ModelBuffers::download_error_sum(&self.ctx, &self.buffers))?;
+
+        Ok(0.5 * sum_sq)
     }
 
     fn input_values(&mut self) -> Result<Vec<f32>> {

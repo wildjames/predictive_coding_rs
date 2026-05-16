@@ -1,12 +1,16 @@
 //! Integration tests that verify GPU and CPU backends produce identical results.
 //!
 //! Requires the `gpu` feature and a working GPU adapter (or software fallback).
+//! All tests share a single [`GpuContext`] to avoid intermittent SIGSEGV from
+//! concurrent driver teardown of multiple devices.
 
 #![cfg(feature = "gpu")]
 
+use std::sync::{Arc, OnceLock};
+
 use predictive_coding::model::{
     CpuModelRuntime, GpuModelRuntime, ModelSnapshot, PredictiveCodingModel,
-    PredictiveCodingModelConfig, TrainableModelRuntime, maths::ActivationFunction,
+    PredictiveCodingModelConfig, TrainableModelRuntime, gpu::GpuContext, maths::ActivationFunction,
 };
 
 /// Absolute tolerance for floating-point comparisons.
@@ -51,6 +55,19 @@ fn make_test_snapshot(layer_sizes: &[usize], activation: ActivationFunction) -> 
 
 type BoxedRuntime = Box<dyn TrainableModelRuntime>;
 
+/// Single shared GPU context, initialised once and reused by every test.
+fn shared_gpu_context() -> Arc<GpuContext> {
+    static CTX: OnceLock<Arc<GpuContext>> = OnceLock::new();
+    CTX.get_or_init(|| {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime for shared GpuContext");
+        rt.block_on(GpuContext::new()).expect("GpuContext::new")
+    })
+    .clone()
+}
+
 fn make_runtimes(
     layer_sizes: &[usize],
     activation: ActivationFunction,
@@ -60,7 +77,8 @@ fn make_runtimes(
     let cpu: CpuModelRuntime =
         CpuModelRuntime::from_snapshot(&snapshot).expect("cpu from snapshot");
     let gpu: GpuModelRuntime =
-        GpuModelRuntime::from_snapshot(&snapshot).expect("gpu from snapshot");
+        GpuModelRuntime::from_snapshot_with_context(&snapshot, shared_gpu_context())
+            .expect("gpu from snapshot");
 
     let input_size = layer_sizes[0];
     let output_size = *layer_sizes.last().unwrap();
