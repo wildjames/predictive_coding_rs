@@ -20,6 +20,9 @@ pub struct LayerBuffers {
     pub weights: wgpu::Buffer,
     /// Per-weight scratch buffer holding computed deltas before applying to weights.
     pub weight_deltas: wgpu::Buffer,
+    /// Per-weight accumulation buffer for minibatch training.
+    /// Accumulated deltas are summed here across batch samples, then applied once.
+    pub weight_deltas_accum: wgpu::Buffer,
     /// Per-node scratch buffer holding `abs(value_change)` after a timestep dispatch.
     pub value_changes: wgpu::Buffer,
     /// Per-row scratch buffer holding precomputed `f'(W[i,:] · x) * lower_errors[i]`.
@@ -130,6 +133,13 @@ impl LayerBuffers {
             usage: BUF_USAGE,
         });
 
+        let weight_accum_zeros = vec![0.0_f32; weight_delta_count];
+        let weight_deltas_accum = device.create_buffer_init(&BufferInitDescriptor {
+            label: Some("layer_weight_deltas_accum"),
+            contents: bytemuck::cast_slice(&weight_accum_zeros),
+            usage: BUF_USAGE,
+        });
+
         // Buffer 6
         let gain_error_count = if layer.weight_rows == 0 {
             1
@@ -165,6 +175,7 @@ impl LayerBuffers {
             errors,
             weights,
             weight_deltas,
+            weight_deltas_accum,
             value_changes,
             gain_errors,
             meta,

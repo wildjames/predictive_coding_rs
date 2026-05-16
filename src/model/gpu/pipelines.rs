@@ -13,6 +13,8 @@ pub struct PcPipelines {
     pub compute_weight_deltas: wgpu::ComputePipeline,
     pub apply_weight_deltas: wgpu::ComputePipeline,
     pub sum_value_change: wgpu::ComputePipeline,
+    pub accumulate_weight_deltas: wgpu::ComputePipeline,
+    pub apply_accumulated_weight_deltas: wgpu::ComputePipeline,
 }
 
 impl PcPipelines {
@@ -78,6 +80,14 @@ impl PcPipelines {
             ),
             apply_weight_deltas: make_tw("apply_weight_deltas", "apply_weight_deltas_pipeline"),
             sum_value_change: make_tw("reduce_value_change", "sum_value_change_pipeline"),
+            accumulate_weight_deltas: make_tw(
+                "accumulate_weight_deltas",
+                "accumulate_weight_deltas_pipeline",
+            ),
+            apply_accumulated_weight_deltas: make_tw(
+                "apply_accumulated_weight_deltas",
+                "apply_accumulated_weight_deltas_pipeline",
+            ),
         }
     }
 }

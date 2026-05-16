@@ -12,6 +12,7 @@
 //   @group(0) @binding(7)  upper_value_changes  : array<f32>  (rw)
 //   @group(0) @binding(8)  lower_errors         : array<f32>  (read)
 //   @group(0) @binding(9)  vc_partial_sums      : array<f32>  (rw)     per-workgroup partial sums, offset per layer
+//   @group(0) @binding(10) weight_deltas_accum  : array<f32>  (rw)     minibatch accumulation buffer
 // ---------------------------------------------------------------------------
 
 // Activation function IDs (must match buffers::ACTIVATION_* constants)
@@ -31,6 +32,7 @@ const ACTIVATION_TANH: u32    = 2u;
 @group(0) @binding(7) var<storage, read_write> upper_value_changes  : array<f32>;
 @group(0) @binding(8) var<storage, read>       lower_errors         : array<f32>;
 @group(0) @binding(9) var<storage, read_write> vc_partial_sums      : array<f32>;
+@group(0) @binding(10) var<storage, read_write> weight_deltas_accum : array<f32>;
 
 // ---- helpers --------------------------------------------------------------
 
@@ -222,4 +224,42 @@ fn reduce_value_change(
     if (local_idx == 0u) {
         vc_partial_sums[offset + gid.x / 64u] = shared_vc_sum[0];
     }
+}
+
+/// Accumulate computed weight deltas into the minibatch accumulation buffer.
+///
+/// accum[i] += weight_deltas[i]
+///
+/// One thread per weight element. Must be dispatched AFTER compute_weight_deltas.
+@compute @workgroup_size(64)
+fn accumulate_weight_deltas(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let weight_rows = upper_meta[3];
+    let weight_cols = upper_meta[4];
+    let total       = weight_rows * weight_cols;
+    let flat_idx    = gid.x;
+
+    if flat_idx >= total {
+        return;
+    }
+
+    weight_deltas_accum[flat_idx] = weight_deltas_accum[flat_idx] + weight_deltas[flat_idx];
+}
+
+/// Apply accumulated weight deltas from minibatch training to the weight matrix.
+///
+/// weights[i] += accum[i]
+///
+/// One thread per weight element.
+@compute @workgroup_size(64)
+fn apply_accumulated_weight_deltas(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let weight_rows = upper_meta[3];
+    let weight_cols = upper_meta[4];
+    let total       = weight_rows * weight_cols;
+    let flat_idx    = gid.x;
+
+    if flat_idx >= total {
+        return;
+    }
+
+    upper_weights[flat_idx] = upper_weights[flat_idx] + weight_deltas_accum[flat_idx];
 }

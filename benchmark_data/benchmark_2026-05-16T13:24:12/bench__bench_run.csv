@@ -1,0 +1,2 @@
+step,total_ms,setup_accumulators_ms,set_data_ms,reinitialise_latents_ms,converge_values_ms,accumulate_deltas_ms,apply_deltas_ms,restore_alpha_ms
+0,9211.069,3.632,0.431,0.249,9152.041,51.651,3.009,0.029

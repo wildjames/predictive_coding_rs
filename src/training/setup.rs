@@ -1,15 +1,20 @@
 use crate::{
     data_handling::TrainingDataset,
     error::{PredictiveCodingError, Result},
-    model::PredictiveCodingModel,
+    model::{CpuModelRuntime, PredictiveCodingModel},
 };
 
 use super::{
     TrainConfig, TrainingHandler, TrainingStrategy,
-    handlers::{BatchTrainHandler, SingleThreadTrainHandler},
+    handlers::{CpuBatchTrainHandler, SingleThreadTrainHandler},
     load_dataset, load_model, load_training_config, validate_model_and_dataset_shapes,
     validate_training_config,
 };
+
+#[cfg(feature = "gpu")]
+use super::handlers::GpuBatchTrainHandler;
+#[cfg(feature = "gpu")]
+use crate::model::GpuModelRuntime;
 
 use std::sync::Arc;
 use tracing::info;
@@ -19,21 +24,43 @@ fn get_handler(
     model: PredictiveCodingModel,
     data: Arc<dyn TrainingDataset>,
     file_output_prefix: String,
-) -> Box<dyn TrainingHandler> {
+) -> Result<Box<dyn TrainingHandler>> {
     match training_config.training_strategy.clone() {
-        TrainingStrategy::SingleThread => Box::new(SingleThreadTrainHandler::new(
-            training_config,
-            model,
-            data,
-            file_output_prefix,
-        )),
-        TrainingStrategy::MiniBatch { batch_size } => Box::new(BatchTrainHandler::new(
+        TrainingStrategy::CpuSingleThread => {
+            let runtime = CpuModelRuntime::from_model(model);
+            Ok(Box::new(SingleThreadTrainHandler::new(
+                training_config,
+                runtime,
+                data,
+                file_output_prefix,
+            )))
+        }
+        TrainingStrategy::CpuMiniBatch { batch_size } => Ok(Box::new(CpuBatchTrainHandler::new(
             training_config,
             model,
             data,
             file_output_prefix,
             batch_size,
-        )),
+        ))),
+        #[cfg(feature = "gpu")]
+        TrainingStrategy::GpuSingleThread => {
+            let snapshot = model.to_snapshot();
+            let runtime = GpuModelRuntime::from_snapshot(&snapshot)?;
+            Ok(Box::new(SingleThreadTrainHandler::new(
+                training_config,
+                runtime,
+                data,
+                file_output_prefix,
+            )))
+        }
+        #[cfg(feature = "gpu")]
+        TrainingStrategy::GpuMiniBatch { batch_size } => Ok(Box::new(GpuBatchTrainHandler::new(
+            training_config,
+            model,
+            data,
+            file_output_prefix,
+            batch_size,
+        )?)),
     }
 }
 
@@ -74,5 +101,5 @@ pub fn setup_training_run_handler(
 
     // The handler orchestrated the training process by providing hook functions to the training loop.
     // Choose the correct one for this config.
-    Ok(get_handler(training_config, model, data, output_prefix))
+    get_handler(training_config, model, data, output_prefix)
 }

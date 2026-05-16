@@ -9,5 +9,5 @@ pub use configuration::{
     save_training_config,
 };
 pub use setup::setup_training_run_handler;
-pub use train_handler::{TrainingHandler, run_supervised_training_loop};
+pub use train_handler::{StepProfile, TrainingHandler, run_supervised_training_loop};
 pub use validation::{validate_model_and_dataset_shapes, validate_training_config};

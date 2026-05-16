@@ -392,10 +392,17 @@ impl GpuModelRuntime {
 
     /// Dispatch the weight-update kernel for every layer pair (three-pass).
     ///
-    /// Pass 1: compute gain_errors (preactivation derivatives × lower errors)
+    /// Pass 1: compute gain_errors (preactivation derivatives * lower errors)
     /// Pass 2: compute deltas into a separate buffer
     /// Pass 3: apply deltas to the weight matrix
     fn dispatch_weight_updates(&self) {
+        self.dispatch_compute_weight_deltas();
+        self.dispatch_apply_weight_deltas();
+    }
+
+    /// Dispatch passes 1+2 of the weight update: compute gain_errors then
+    /// compute weight deltas into the `weight_deltas` buffer (does NOT apply).
+    fn dispatch_compute_weight_deltas(&self) {
         // Pass 1: compute_gain_errors
         let mut encoder = self
             .ctx
@@ -410,7 +417,7 @@ impl GpuModelRuntime {
             if weight_rows == 0 {
                 continue;
             }
-            let workgroups = weight_rows.div_ceil(64);
+            let workgroups: u32 = weight_rows.div_ceil(64);
 
             let mut pass = encoder.begin_compute_pass(&Default::default());
             pass.set_pipeline(&self.pipelines.compute_gain_errors);
@@ -443,8 +450,9 @@ impl GpuModelRuntime {
         }
 
         self.ctx.queue.submit(std::iter::once(encoder.finish()));
+    }
 
-        // Pass 3: apply_weight_deltas
+    fn dispatch_apply_weight_deltas(&self) {
         let mut encoder = self
             .ctx
             .device
@@ -467,6 +475,95 @@ impl GpuModelRuntime {
         }
 
         self.ctx.queue.submit(std::iter::once(encoder.finish()));
+    }
+
+    // -------------------------------------------------------------------
+    // GPU-native minibatch helpers
+    // -------------------------------------------------------------------
+
+    /// Zero the `weight_deltas_accum` buffers for all layers.
+    /// Call at the start of each minibatch.
+    pub fn zero_weight_accumulators(&self) {
+        for lb in &self.buffers.layers {
+            let byte_len: usize =
+                (lb.weight_rows * lb.weight_cols).max(1) * std::mem::size_of::<f32>();
+            let zeros: Vec<u8> = vec![0u8; byte_len];
+            self.ctx
+                .queue
+                .write_buffer(&lb.weight_deltas_accum, 0, &zeros);
+        }
+    }
+
+    /// Dispatch gain_errors + weight_deltas + accumulate for all layers.
+    /// This computes the weight deltas for the current sample and adds
+    /// them to the accumulation buffer without applying to the weights.
+    pub fn accumulate_weight_deltas_on_device(&self) {
+        // Pass 1 and 2: compute gain_errors and weight_deltas
+        self.dispatch_compute_weight_deltas();
+
+        // Pass 3: accumulate into weight_deltas_accum
+        let mut encoder = self
+            .ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("accumulate_weight_deltas_encoder"),
+            });
+
+        for i in 1..self.tw_bind_groups.len() {
+            let lb = &self.buffers.layers[i];
+            let total_weights: u32 = (lb.weight_rows * lb.weight_cols) as u32;
+            if total_weights == 0 {
+                continue;
+            }
+            let workgroups: u32 = total_weights.div_ceil(64);
+
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&self.pipelines.accumulate_weight_deltas);
+            pass.set_bind_group(0, &self.tw_bind_groups[i], &[]);
+            pass.dispatch_workgroups(workgroups, 1, 1);
+        }
+
+        self.ctx.queue.submit(std::iter::once(encoder.finish()));
+    }
+
+    /// Apply the accumulated weight deltas to the weight matrices.
+    /// Call once at the end of a minibatch.
+    pub fn apply_accumulated_weight_deltas(&self) {
+        let mut encoder = self
+            .ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("apply_accumulated_weight_deltas_encoder"),
+            });
+
+        for i in 1..self.tw_bind_groups.len() {
+            let lb = &self.buffers.layers[i];
+            let total_weights = (lb.weight_rows * lb.weight_cols) as u32;
+            if total_weights == 0 {
+                continue;
+            }
+            let workgroups = total_weights.div_ceil(64);
+
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&self.pipelines.apply_accumulated_weight_deltas);
+            pass.set_bind_group(0, &self.tw_bind_groups[i], &[]);
+            pass.dispatch_workgroups(workgroups, 1, 1);
+        }
+
+        self.ctx.queue.submit(std::iter::once(encoder.finish()));
+    }
+
+    /// Overwrite the `alpha` parameter in the GPU params uniform buffer.
+    /// Used by the minibatch handler to scale deltas by `1/batch_size`.
+    pub fn set_params_alpha(&self, alpha: f32) {
+        self.ctx
+            .queue
+            .write_buffer(&self.buffers.params, 0, bytemuck::cast_slice(&[alpha]));
+    }
+
+    /// Human-readable description of the GPU adapter.
+    pub fn gpu_description(&self) -> String {
+        self.ctx.adapter_description()
     }
 
     // -------------------------------------------------------------------
@@ -692,85 +789,37 @@ impl ModelRuntime for GpuModelRuntime {
 
 impl TrainableModelRuntime for GpuModelRuntime {
     fn compute_weight_updates(&mut self) -> Result<WeightUpdateSet> {
-        // For minibatch support we need the delta_W *without* applying it.
-        // For now, I'm doing this on the CPU but I need to write a new kernel to do it on the GPU without needing a readback
-        // However, this placeholder will serve for now.
-        // TODO: Implement this on the GPU.
+        // Dispatch gain_errors and weight_deltas on the GPU, then download
+        // only the resulting weight_deltas buffers
+        self.dispatch_compute_weight_deltas();
 
-        // Download the necessary data and compute on CPU.
         let n = self.buffers.layers.len();
         let mut updates: Vec<Vec<f32>> = Vec::with_capacity(n.saturating_sub(1));
         let mut shapes: Vec<(usize, usize)> = Vec::with_capacity(n.saturating_sub(1));
 
-        // Pre-download all layer data we need.
-        let mut all_values: Vec<Vec<f32>> = Vec::with_capacity(n);
-        let mut all_errors: Vec<Vec<f32>> = Vec::with_capacity(n);
-        let mut all_weights: Vec<Vec<f32>> = Vec::with_capacity(n);
-        for lb in &self.buffers.layers {
-            all_values.push(
-                self.rt
-                    .block_on(ModelBuffers::download_values(&self.ctx, lb))?,
-            );
-            all_errors.push(
-                self.rt
-                    .block_on(ModelBuffers::download_errors(&self.ctx, lb))?,
-            );
-            all_weights.push(
-                self.rt
-                    .block_on(ModelBuffers::download_weights(&self.ctx, lb))?,
-            );
-        }
-
-        let alpha = self.config.alpha;
-
-        for i in 0..n.saturating_sub(1) {
-            let upper_idx = i + 1;
-            let lower_idx = i;
-            let upper_size = self.buffers.layers[upper_idx].size;
-            let lower_size = self.buffers.layers[lower_idx].size;
-
-            let upper_values = &all_values[upper_idx];
-            let upper_weights = &all_weights[upper_idx];
-            let lower_errors = &all_errors[lower_idx];
-
-            let act_fn = self.config.activation_function;
-
-            let mut delta = vec![0.0_f32; lower_size * upper_size];
-            for row in 0..lower_size {
-                // preactivation[row] = sum_k W[row][k] * upper_values[k]
-                let mut preact: f32 = 0.0;
-                for k in 0..upper_size {
-                    preact += upper_weights[row * upper_size + k] * upper_values[k];
-                }
-                let gain_error = act_fn.derivative(preact) * lower_errors[row];
-                for col in 0..upper_size {
-                    delta[row * upper_size + col] = alpha * gain_error * upper_values[col];
-                }
-            }
-
-            shapes.push((lower_size, upper_size));
-            updates.push(delta);
+        for i in 1..n {
+            let lb = &self.buffers.layers[i];
+            let deltas = self
+                .rt
+                .block_on(ModelBuffers::download_weight_deltas(&self.ctx, lb))?;
+            shapes.push((lb.weight_rows, lb.weight_cols));
+            updates.push(deltas);
         }
 
         Ok(WeightUpdateSet { updates, shapes })
     }
 
     fn apply_weight_updates(&mut self, updates: &WeightUpdateSet) -> Result<()> {
-        // Download current weights, add deltas, re-upload.
-        // TODO: This should have a GPU kernel to do this in-place.
+        // Upload the delta vectors into each layer's weight_deltas buffer,
+        // then dispatch the apply kernel to add them to weights in-place.
         for (i, delta) in updates.updates.iter().enumerate() {
             let layer_idx = i + 1;
             let lb = &self.buffers.layers[layer_idx];
-            let mut weights = self
-                .rt
-                .block_on(ModelBuffers::download_weights(&self.ctx, lb))?;
-            for (w, d) in weights.iter_mut().zip(delta.iter()) {
-                *w += d;
-            }
             self.ctx
                 .queue
-                .write_buffer(&lb.weights, 0, bytemuck::cast_slice(&weights));
+                .write_buffer(&lb.weight_deltas, 0, bytemuck::cast_slice(delta));
         }
+        self.dispatch_apply_weight_deltas();
         Ok(())
     }
 

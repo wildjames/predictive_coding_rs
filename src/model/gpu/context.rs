@@ -40,9 +40,9 @@ impl GpuContext {
                 label: Some("predictive_coding_device"),
                 required_features: wgpu::Features::empty(),
                 required_limits: wgpu::Limits {
-                    // The timestep_weight bind group layout uses 9 storage buffers
+                    // The timestep_weight bind group layout uses 10 storage buffers
                     // (plus 1 uniform), exceeding the default limit of 8.
-                    max_storage_buffers_per_shader_stage: 10,
+                    max_storage_buffers_per_shader_stage: 11,
                     ..wgpu::Limits::default()
                 },
                 ..Default::default()

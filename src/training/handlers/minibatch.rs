@@ -2,8 +2,8 @@ use crate::{
     data_handling::TrainingDataset,
     error::Result,
     model::{
-        CpuModelRuntime, ModelRuntime, PredictiveCodingModel, TrainableModelRuntime,
-        WeightUpdateSet, model_utils::set_rand_input_and_output,
+        CpuModelRuntime, ModelRuntime, ModelSnapshot, PredictiveCodingModel,
+        PredictiveCodingModelConfig, TrainableModelRuntime, WeightUpdateSet,
     },
 };
 
@@ -13,9 +13,12 @@ use chrono::TimeDelta;
 use ndarray::{Array1, Array2};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::sync::Arc;
+use std::time::Instant;
 use tracing::{debug, info};
 
-pub struct BatchTrainHandler {
+use super::super::StepProfile;
+
+pub struct CpuBatchTrainHandler {
     config: TrainConfig,
     runtime: CpuModelRuntime,
     data: Arc<dyn TrainingDataset>,
@@ -23,7 +26,7 @@ pub struct BatchTrainHandler {
     batch_size: u32,
 }
 
-impl BatchTrainHandler {
+impl CpuBatchTrainHandler {
     pub fn new(
         config: TrainConfig,
         model: PredictiveCodingModel,
@@ -31,7 +34,7 @@ impl BatchTrainHandler {
         file_output_prefix: String,
         batch_size: u32,
     ) -> Self {
-        BatchTrainHandler {
+        CpuBatchTrainHandler {
             config,
             runtime: CpuModelRuntime::from_model(model),
             data,
@@ -41,12 +44,21 @@ impl BatchTrainHandler {
     }
 }
 
-impl TrainingHandler for BatchTrainHandler {
+impl TrainingHandler for CpuBatchTrainHandler {
     fn get_config(&self) -> &TrainConfig {
         &self.config
     }
-    fn get_model(&mut self) -> &mut PredictiveCodingModel {
-        self.runtime.model_mut()
+    fn model_snapshot(&mut self) -> Result<ModelSnapshot> {
+        self.runtime.snapshot()
+    }
+    fn model_config(&self) -> PredictiveCodingModelConfig {
+        self.runtime.config()
+    }
+    fn pin_input(&mut self) -> Result<()> {
+        self.runtime.pin_input()
+    }
+    fn pin_output(&mut self) -> Result<()> {
+        self.runtime.pin_output()
     }
     fn get_data(&self) -> &dyn TrainingDataset {
         self.data.as_ref()
@@ -62,13 +74,17 @@ impl TrainingHandler for BatchTrainHandler {
         Ok(())
     }
 
-    /// Train batch_size models in parallel on different data, then compute the average weight update across them and apply it to the model.
-    fn train_step(&mut self, _step: u32) -> Result<()> {
+    fn profiled_train_step(&mut self, _step: u32) -> Result<StepProfile> {
+        let mut profile = StepProfile::new();
+
+        let t = Instant::now();
         // I'll iterate over this with Rayon to parallelise the batch
         let batch_inputs_and_outputs: Vec<(Array1<f32>, Array1<f32>)> = (0..self.batch_size)
             .map(|_| self.data.get_random_input_and_output())
             .collect();
+        profile.record("prepare_batch_data", t.elapsed());
 
+        let t = Instant::now();
         // Each element of the batch trains on a single sample, and we collect their weight changes as a result.
         // The batch weight changes will be a Vec of length batch_size, where each element is a Vec of length
         // num_layers, and each element of THAT is an array2 of the weight changes for the relevant layer.
@@ -100,7 +116,9 @@ impl TrainingHandler for BatchTrainHandler {
             "Batch weight changes computed for {} samples",
             self.batch_size
         );
+        profile.record("parallel_converge", t.elapsed());
 
+        let t = Instant::now();
         // Unwrap results and collect into Vec<WeightUpdateSet>
         let successful_updates: Vec<WeightUpdateSet> = batch_weight_changes
             .into_iter()
@@ -133,7 +151,9 @@ impl TrainingHandler for BatchTrainHandler {
             .into_iter()
             .map(|sum_weight_change| sum_weight_change / self.batch_size as f32)
             .collect();
+        profile.record("aggregate_updates", t.elapsed());
 
+        let t = Instant::now();
         // Apply the average weight changes to the model.
         let updates = WeightUpdateSet {
             updates: avg_batch_weight_changes
@@ -146,8 +166,9 @@ impl TrainingHandler for BatchTrainHandler {
                 .collect(),
         };
         self.runtime.apply_weight_updates(&updates)?;
+        profile.record("apply_weights", t.elapsed());
 
-        Ok(())
+        Ok(profile)
     }
 
     fn report_hook(&mut self, step: u32, mean_step_time: TimeDelta) -> Result<()> {
@@ -164,8 +185,12 @@ impl TrainingHandler for BatchTrainHandler {
 
         // The mini batch model is cloned for each batch element, so the main model never gets inference run on it
         // So, do that in the reporting step to get a sense of how the model is doing on the data.
+        let (input, output) = self.data.get_random_input_and_output();
+        self.runtime
+            .set_input(input.as_slice().expect("contiguous input array"))?;
+        self.runtime
+            .set_output(output.as_slice().expect("contiguous output array"))?;
         self.runtime.reinitialise_latents()?;
-        set_rand_input_and_output(self.runtime.model_mut(), self.data.as_ref());
         self.runtime.converge_values()?;
 
         let energy: f32 = self.runtime.total_energy()?;
@@ -199,7 +224,7 @@ mod tests {
                 input_idx_file: String::from("unused-images.idx"),
                 output_idx_file: String::from("unused-labels.idx"),
             }),
-            training_strategy: TrainingStrategy::SingleThread,
+            training_strategy: TrainingStrategy::CpuSingleThread,
             training_steps: 1,
             report_interval: 0,
             snapshot_interval: 0,
@@ -234,14 +259,16 @@ mod tests {
         let dataset: Arc<dyn TrainingDataset> = tiny_dataset();
         let config: TrainConfig = dummy_config();
 
-        let mut single_handler: SingleThreadTrainHandler = SingleThreadTrainHandler::new(
-            config.clone(),
-            initial_model.clone(),
-            Arc::clone(&dataset),
-            String::from("unused/single"),
-        );
+        let runtime = CpuModelRuntime::from_model(initial_model.clone());
+        let mut single_handler: SingleThreadTrainHandler<CpuModelRuntime> =
+            SingleThreadTrainHandler::new(
+                config.clone(),
+                runtime,
+                Arc::clone(&dataset),
+                String::from("unused/single"),
+            );
 
-        let mut batch_handler: BatchTrainHandler = BatchTrainHandler::new(
+        let mut batch_handler: CpuBatchTrainHandler = CpuBatchTrainHandler::new(
             config,
             initial_model,
             dataset,
@@ -252,15 +279,27 @@ mod tests {
         single_handler.train_step(0).unwrap();
         batch_handler.train_step(0).unwrap();
 
-        let single_weights = &single_handler.get_model().get_layer(1).weights;
-        let batch_weights = &batch_handler.get_model().get_layer(1).weights;
-        assert_arrays_close(single_weights, batch_weights, 1e-6);
+        let single_snapshot = single_handler.model_snapshot().unwrap();
+        let batch_snapshot = batch_handler.model_snapshot().unwrap();
+        let single_layer = &single_snapshot.layers[1];
+        let batch_layer = &batch_snapshot.layers[1];
+        let single_weights = Array2::from_shape_vec(
+            (single_layer.weight_rows, single_layer.weight_cols),
+            single_layer.weights.clone(),
+        )
+        .unwrap();
+        let batch_weights = Array2::from_shape_vec(
+            (batch_layer.weight_rows, batch_layer.weight_cols),
+            batch_layer.weights.clone(),
+        )
+        .unwrap();
+        assert_arrays_close(&single_weights, &batch_weights, 1e-6);
     }
 
     #[test]
     fn minibatch_report_hook_and_dataset_accessors_use_fixture_sample() {
         let dataset = tiny_dataset();
-        let mut handler = BatchTrainHandler::new(
+        let mut handler = CpuBatchTrainHandler::new(
             dummy_config(),
             tiny_relu_model(),
             Arc::clone(&dataset),

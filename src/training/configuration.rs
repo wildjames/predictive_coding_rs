@@ -9,8 +9,16 @@ use std::sync::Arc;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub enum TrainingStrategy {
-    SingleThread,
-    MiniBatch { batch_size: u32 },
+    CpuSingleThread,
+    CpuMiniBatch {
+        batch_size: u32,
+    },
+    #[cfg(feature = "gpu")]
+    GpuSingleThread,
+    #[cfg(feature = "gpu")]
+    GpuMiniBatch {
+        batch_size: u32,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -137,7 +145,7 @@ mod tests {
                 input_idx_file: String::from("test_data/mnist/train-images-idx3-ubyte"),
                 output_idx_file: String::from("test_data/mnist/train-labels-idx1-ubyte"),
             }),
-            training_strategy: TrainingStrategy::MiniBatch { batch_size: 4 },
+            training_strategy: TrainingStrategy::CpuMiniBatch { batch_size: 4 },
             training_steps: 12,
             report_interval: 3,
             snapshot_interval: 6,
