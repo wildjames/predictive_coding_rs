@@ -37,6 +37,7 @@ pub struct PcBindGroupLayouts {
     /// Binding 6: upper_errors         (storage, read_write)
     /// Binding 7: upper_value_changes  (storage, read_write)
     /// Binding 8: lower_errors         (storage, read)
+    /// Binding 9: vc_partial_sums      (storage, read_write)
     pub timestep_weight: wgpu::BindGroupLayout,
 }
 
@@ -73,6 +74,7 @@ impl PcBindGroupLayouts {
                         storage_entry(6, false), // upper errors (rw)
                         storage_entry(7, false), // upper value_changes (rw)
                         storage_entry(8, true),  // lower errors
+                        storage_entry(9, false), // vc_partial_sums (rw)
                     ],
                 });
 
@@ -172,6 +174,7 @@ pub fn create_timestep_weight_bind_group(
     layouts: &PcBindGroupLayouts,
     upper: &super::buffers::LayerBuffers,
     lower_errors: &wgpu::Buffer,
+    value_change_sum: &wgpu::Buffer,
     params: &wgpu::Buffer,
     label: &str,
 ) -> wgpu::BindGroup {
@@ -214,6 +217,10 @@ pub fn create_timestep_weight_bind_group(
             wgpu::BindGroupEntry {
                 binding: 8,
                 resource: lower_errors.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 9,
+                resource: value_change_sum.as_entire_binding(),
             },
         ],
     })

@@ -146,6 +146,8 @@ impl GpuModelRuntime {
         let n: usize = buffers.layers.len();
         let mut groups: Vec<wgpu::BindGroup> = Vec::with_capacity(n);
         for i in 0..n {
+            // The bottom layer has no layer below it, so I bind a dummy buffer for the error readout
+            // Since for that layer, weight_rows == 0, the shade skips it anyway.
             let lower_errors_buf = if i == 0 {
                 &buffers.dummy_lower_errors
             } else {
@@ -157,6 +159,7 @@ impl GpuModelRuntime {
                 layouts,
                 &buffers.layers[i],
                 lower_errors_buf,
+                &buffers.value_change_sum,
                 &buffers.params,
                 &label,
             ));
@@ -292,6 +295,33 @@ impl GpuModelRuntime {
         self.ctx.queue.submit(std::iter::once(encoder.finish()));
     }
 
+    /// Dispatch `reduce_value_change` for every layer in a single encoder submit.
+    ///
+    /// Each layer writes to its own offset in the shared `value_change_sum` buffer,
+    /// so all layers can be batched without overwriting each other.
+    /// Unlike `dispatch_reduce_error_sq`, the tw_bind_groups cover all layers
+    /// (including the top layer), so no special case is needed.
+    fn dispatch_reduce_value_change(&self) {
+        let mut encoder = self
+            .ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("reduce_value_change_encoder"),
+            });
+
+        for (i, bg) in self.tw_bind_groups.iter().enumerate() {
+            let size = self.buffers.layers[i].size as u32;
+            let workgroups = size.div_ceil(64);
+
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&self.pipelines.sum_value_change);
+            pass.set_bind_group(0, bg, &[]);
+            pass.dispatch_workgroups(workgroups, 1, 1);
+        }
+
+        self.ctx.queue.submit(std::iter::once(encoder.finish()));
+    }
+
     /// Dispatch the timestep kernel for every layer.
     ///
     /// Layer 0 uses the bottom self-bind-group.  Layers 1..N use `bind_groups[i-1]`
@@ -349,16 +379,14 @@ impl GpuModelRuntime {
     /// Download `value_changes` from all layers and return the mean absolute
     /// value change (same metric as the CPU backend).
     fn read_total_value_change(&self) -> Result<f32> {
-        let mut total: f32 = 0.0;
-        let mut total_nodes: usize = 0;
-        for lb in &self.buffers.layers {
-            let changes = self
-                .rt
-                // TODO: Rather than downloading every value of every layer, this should have a GPU kernel to do a parallel reduction and return just the total change. This is a lot of data to move for just a single scalar.
-                .block_on(ModelBuffers::download_value_changes(&self.ctx, lb))?;
-            total += changes.iter().sum::<f32>();
-            total_nodes += lb.size;
-        }
+        self.dispatch_reduce_value_change();
+
+        let total: f32 = self.rt.block_on(ModelBuffers::download_value_change_sum(
+            &self.ctx,
+            &self.buffers,
+        ))?;
+
+        let total_nodes: usize = self.buffers.layers.iter().map(|lb| lb.size).sum();
         Ok(total / total_nodes as f32)
     }
 
@@ -584,6 +612,7 @@ impl ModelRuntime for GpuModelRuntime {
 
     fn reinitialise_latents(&mut self) -> Result<()> {
         // Re-upload random values for interior layers (skip first and last).
+        // TODO: Can we dispatch a kernel to do this, so we avoid a data upload?
         let mut rng = rand::rng();
         for i in 1..self.buffers.layers.len() - 1 {
             let size = self.buffers.layers[i].size;

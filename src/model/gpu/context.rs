@@ -39,7 +39,12 @@ impl GpuContext {
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("predictive_coding_device"),
                 required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::default(),
+                required_limits: wgpu::Limits {
+                    // The timestep_weight bind group layout uses 9 storage buffers
+                    // (plus 1 uniform), exceeding the default limit of 8.
+                    max_storage_buffers_per_shader_stage: 10,
+                    ..wgpu::Limits::default()
+                },
                 ..Default::default()
             })
             .await

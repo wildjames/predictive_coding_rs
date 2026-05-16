@@ -12,6 +12,7 @@ pub struct PcPipelines {
     pub timestep: wgpu::ComputePipeline,
     pub compute_weight_deltas: wgpu::ComputePipeline,
     pub apply_weight_deltas: wgpu::ComputePipeline,
+    pub sum_value_change: wgpu::ComputePipeline,
 }
 
 impl PcPipelines {
@@ -76,6 +77,7 @@ impl PcPipelines {
                 "compute_weight_deltas_pipeline",
             ),
             apply_weight_deltas: make_tw("apply_weight_deltas", "apply_weight_deltas_pipeline"),
+            sum_value_change: make_tw("reduce_value_change", "sum_value_change_pipeline"),
         }
     }
 }

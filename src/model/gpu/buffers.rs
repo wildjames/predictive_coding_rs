@@ -187,6 +187,9 @@ pub struct ModelBuffers {
     /// Buffer for the error reduction kernel's partial sums (one per workgroup).
     /// Sized to fit all layers' workgroups contiguously (`total_sums` floats).
     pub error_sum: wgpu::Buffer,
+    /// Buffer for the value-change reduction kernel's partial sums (one per workgroup).
+    /// Same sizing as `error_sum`.
+    pub value_change_sum: wgpu::Buffer,
     /// Total number of f32 slots in summing arrays, e.g. `error_sum`, equal to the sum of
     /// `layer_size.div_ceil(64)` across all layers.
     pub total_sums: usize,
@@ -259,11 +262,20 @@ impl ModelBuffers {
             usage: BUF_USAGE,
         });
 
+        // Buffer for value-change reduction kernel partial sums (same sizing).
+        let vc_sum_zeros: Vec<f32> = vec![0.0_f32; total_slots];
+        let value_change_sum: wgpu::Buffer = ctx.device.create_buffer_init(&BufferInitDescriptor {
+            label: Some("value_change_sum"),
+            contents: bytemuck::cast_slice(&vc_sum_zeros),
+            usage: BUF_USAGE,
+        });
+
         Self {
             layers,
             params,
             dummy_lower_errors,
             error_sum,
+            value_change_sum,
             total_sums,
         }
     }
@@ -333,6 +345,17 @@ impl ModelBuffers {
         model_bufs: &ModelBuffers,
     ) -> Result<f32> {
         let partial = read_buffer_f32(ctx, &model_bufs.error_sum, model_bufs.total_sums).await?;
+        Ok(partial.iter().sum())
+    }
+
+    /// Read back all partial sums from the value-change reduction kernel and
+    /// return their total.  Same layout as `download_error_sum`.
+    pub async fn download_value_change_sum(
+        ctx: &Arc<GpuContext>,
+        model_bufs: &ModelBuffers,
+    ) -> Result<f32> {
+        let partial =
+            read_buffer_f32(ctx, &model_bufs.value_change_sum, model_bufs.total_sums).await?;
         Ok(partial.iter().sum())
     }
 }
