@@ -21,18 +21,6 @@ impl GpuContext {
             ..Default::default()
         });
 
-        // Log all available adapters for debugging
-        let all_adapters = instance.enumerate_adapters(wgpu::Backends::all()).await;
-        for adapter in &all_adapters {
-            let info = adapter.get_info();
-            tracing::debug!(
-                "Available adapter: {} (backend={:?}, type={:?})",
-                info.name,
-                info.backend,
-                info.device_type
-            );
-        }
-
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
