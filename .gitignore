@@ -3,3 +3,4 @@ data
 xdg_runtime
 .env
 lcov.info
+benchmark_data/benchmark_*
