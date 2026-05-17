@@ -146,3 +146,34 @@ fn reduce_error_sq(
         partial_sums[offset + gid.x / 64u] = shared_sum[0];
     }
 }
+
+/// Gather the raw (signed) errors for this lower layer into partial sums.
+@compute @workgroup_size(64)
+fn reduce_error(
+    @builtin(global_invocation_id) gid: vec3<u32>,
+    @builtin(local_invocation_id) lid: vec3<u32>
+) {
+    let lower_size = lower_meta[2];
+    let offset     = lower_meta[6]; // per-layer offset into partial_sums
+    let idx        = gid.x;
+    let local_idx  = lid.x;
+
+    if idx < lower_size {
+        shared_sum[local_idx] = lower_errors[idx];
+    } else {
+        shared_sum[local_idx] = 0.0;
+    }
+
+    workgroupBarrier();
+
+    for (var stride: u32 = 32u; stride > 0u; stride = stride / 2u) {
+        if (local_idx < stride) {
+            shared_sum[local_idx] += shared_sum[local_idx + stride];
+        }
+        workgroupBarrier();
+    }
+
+    if (local_idx == 0u) {
+        partial_sums[offset + gid.x / 64u] = shared_sum[0];
+    }
+}

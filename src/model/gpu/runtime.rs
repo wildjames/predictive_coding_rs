@@ -295,6 +295,50 @@ impl GpuModelRuntime {
         self.ctx.queue.submit(std::iter::once(encoder.finish()));
     }
 
+    /// Dispatch `reduce_error` for every layer in a single encoder submit.
+    ///
+    /// Same structure as `dispatch_reduce_error_sq` but sums raw (signed) errors
+    /// instead of squared errors.  Writes into the shared `error_sum` buffer.
+    fn dispatch_reduce_error(&self) {
+        let mut encoder = self
+            .ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("reduce_error_encoder"),
+            });
+
+        for (i, bg) in self.pe_bind_groups.iter().enumerate() {
+            let lower_size = self.buffers.layers[i].size as u32;
+            let workgroups = lower_size.div_ceil(64);
+
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&self.pipelines.sum_error);
+            pass.set_bind_group(0, bg, &[]);
+            pass.dispatch_workgroups(workgroups, 1, 1);
+        }
+
+        let top_idx = self.buffers.layers.len() - 1;
+        let top_bg = create_predict_error_bind_group(
+            &self.ctx,
+            &self.layouts,
+            &self.buffers.layers[top_idx],
+            &self.buffers.layers[top_idx],
+            &self.buffers.error_sum,
+            &self.buffers.params,
+            "pe_top_layer_error",
+        );
+        let top_size = self.buffers.layers[top_idx].size as u32;
+        let workgroups = top_size.div_ceil(64);
+
+        let mut pass = encoder.begin_compute_pass(&Default::default());
+        pass.set_pipeline(&self.pipelines.sum_error);
+        pass.set_bind_group(0, &top_bg, &[]);
+        pass.dispatch_workgroups(workgroups, 1, 1);
+        drop(pass);
+
+        self.ctx.queue.submit(std::iter::once(encoder.finish()));
+    }
+
     /// Dispatch `reduce_value_change` for every layer in a single encoder submit.
     ///
     /// Each layer writes to its own offset in the shared `value_change_sum` buffer,
@@ -753,14 +797,13 @@ impl ModelRuntime for GpuModelRuntime {
     }
 
     fn total_error(&mut self) -> Result<f32> {
-        let mut total: f32 = 0.0;
-        for lb in &self.buffers.layers {
-            let errs = self
-                .rt
-                .block_on(ModelBuffers::download_errors(&self.ctx, lb))?;
-            total += errs.iter().sum::<f32>();
-        }
-        Ok(total)
+        self.dispatch_reduce_error();
+
+        let sum: f32 = self
+            .rt
+            .block_on(ModelBuffers::download_error_sum(&self.ctx, &self.buffers))?;
+
+        Ok(sum)
     }
 
     fn total_energy(&mut self) -> Result<f32> {
