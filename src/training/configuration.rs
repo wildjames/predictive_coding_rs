@@ -124,7 +124,7 @@ mod tests {
     }
   },
   "training_strategy": {
-    "MiniBatch": {
+    "CpuMiniBatch": {
       "batch_size": 4
     }
   },
@@ -170,7 +170,7 @@ mod tests {
       "output_idx_file": "test_data/mnist/train-labels-idx1-ubyte"
     }
   },
-  "training_strategy": "SingleThread",
+  "training_strategy": "CpuSingleThread",
   "training_steps": 4,
   "snapshot_interval": 1
 }"#,

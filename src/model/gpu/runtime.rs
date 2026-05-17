@@ -733,6 +733,7 @@ impl ModelRuntime for GpuModelRuntime {
     }
 
     fn converge_values(&mut self) -> Result<u32> {
+        // TODO: This convergence step is like, 97% of the time spent in GPU training. I need to optimize it MASSIVELY!
         let mut convergence_count: u32 = 0;
 
         while convergence_count < self.config.convergence_steps {

@@ -9,7 +9,7 @@
     }
   },
   "training_strategy": {
-    "MiniBatch": {
+    "CpuMiniBatch": {
       "batch_size": 4
     }
   },
