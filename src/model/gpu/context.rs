@@ -18,9 +18,20 @@ impl GpuContext {
     /// This is async because wgpu adapter/device negotiation is async.
     pub async fn new() -> Result<Arc<Self>> {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::all(),
             ..Default::default()
         });
+
+        // Log all available adapters for debugging
+        let all_adapters = instance.enumerate_adapters(wgpu::Backends::all()).await;
+        for adapter in &all_adapters {
+            let info = adapter.get_info();
+            tracing::debug!(
+                "Available adapter: {} (backend={:?}, type={:?})",
+                info.name,
+                info.backend,
+                info.device_type
+            );
+        }
 
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
