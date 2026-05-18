@@ -123,10 +123,11 @@ pub fn run_supervised_training_loop(handler: &mut dyn TrainingHandler) -> Result
 
     let model_config: PredictiveCodingModelConfig = handler.model_config();
     info!(
-        "Model architecture:\n\tlayer sizes: {:?}\n\tgamma: {}\n\talpha: {}\n\tactivation function: {:?}\n\tconvergence steps: {}\n\tconvergence threshold: {}",
+        "Model architecture:\n\tlayer sizes: {:?}\n\tgamma: {}\n\talpha: {}\n\tweight_clip: {}\n\tactivation function: {:?}\n\tconvergence steps: {}\n\tconvergence threshold: {}",
         model_config.layer_sizes,
         model_config.gamma,
         model_config.alpha,
+        model_config.weight_clip,
         model_config.activation_function,
         model_config.convergence_steps,
         model_config.convergence_threshold
