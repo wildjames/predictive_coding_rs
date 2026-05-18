@@ -87,6 +87,23 @@ pub trait TrainingHandler {
     }
 }
 
+/// Log training progress: ETA and current energy.
+pub fn log_training_progress(
+    step: u32,
+    remaining_steps: u32,
+    mean_step_time: TimeDelta,
+    energy: f32,
+) {
+    let est_time_to_finish = mean_step_time * remaining_steps as i32;
+    let est_finish_time = Utc::now() + est_time_to_finish;
+    info!(
+        "Step {}: Current model state: energy = {:.2}\tEstimated finish time: {}",
+        step,
+        energy,
+        est_finish_time.format("%Y-%m-%d %H:%M:%S")
+    );
+}
+
 pub fn run_supervised_training_loop(handler: &mut dyn TrainingHandler) -> Result<()> {
     handler.pre_training_hook()?;
 

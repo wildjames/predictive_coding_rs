@@ -300,85 +300,63 @@ impl GpuModelRuntime {
         self.dispatch_pe_reduction(&self.pipelines.sum_error, "reduce_error");
     }
 
-    /// Dispatch `reduce_value_change` for every layer in a single encoder submit.
-    ///
-    /// Each layer writes to its own offset in the shared `value_change_sum` buffer,
-    /// so all layers can be batched without overwriting each other.
-    /// Unlike `dispatch_reduce_error_sq`, the tw_bind_groups cover all layers
-    /// (including the top layer), so no special case is needed.
-    fn dispatch_reduce_value_change(&self) {
+    /// Dispatch a pipeline over `tw_bind_groups[start..]`, computing workgroup count
+    /// from each layer's buffers via `workgroup_fn`. Layers where `workgroup_fn` returns 0
+    /// are skipped.
+    fn dispatch_tw(
+        &self,
+        pipeline: &wgpu::ComputePipeline,
+        label: &str,
+        start: usize,
+        workgroup_fn: impl Fn(&super::buffers::LayerBuffers) -> u32,
+    ) {
         let mut encoder = self
             .ctx
             .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("reduce_value_change_encoder"),
-            });
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(label) });
 
-        for (i, bg) in self.tw_bind_groups.iter().enumerate() {
-            let size = self.buffers.layers[i].size as u32;
-            let workgroups = size.div_ceil(64);
+        for i in start..self.tw_bind_groups.len() {
+            let lb = &self.buffers.layers[i];
+            let total = workgroup_fn(lb);
+            if total == 0 {
+                continue;
+            }
+            let workgroups = total.div_ceil(64);
 
             let mut pass = encoder.begin_compute_pass(&Default::default());
-            pass.set_pipeline(&self.pipelines.sum_value_change);
-            pass.set_bind_group(0, bg, &[]);
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &self.tw_bind_groups[i], &[]);
             pass.dispatch_workgroups(workgroups, 1, 1);
         }
 
         self.ctx.queue.submit(std::iter::once(encoder.finish()));
     }
 
+    /// Dispatch `reduce_value_change` for every layer in a single encoder submit.
+    fn dispatch_reduce_value_change(&self) {
+        self.dispatch_tw(
+            &self.pipelines.sum_value_change,
+            "reduce_value_change",
+            0,
+            |lb| lb.size as u32,
+        );
+    }
+
     /// Dispatch the timestep kernel for every layer.
-    ///
-    /// Layer 0 uses the bottom self-bind-group.  Layers 1..N use `bind_groups[i-1]`
-    /// which has upper=layer[i], lower=layer[i-1].
     ///
     /// Two passes:
     ///   1. compute_gain_errors: precompute f'(W·x) ⊙ lower_errors per row
     ///   2. values_timestep: use precomputed gain_errors to update values
-    ///
-    /// All layers are independent within each pass, so they are batched in a
-    /// single command encoder per pass.
     fn dispatch_timestep(&self) {
-        // Pass 1: compute gain_errors for all layers
-        let mut encoder = self
-            .ctx
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("gain_errors_encoder"),
-            });
-
-        for (i, bg) in self.tw_bind_groups.iter().enumerate() {
-            let weight_rows = self.buffers.layers[i].weight_rows as u32;
-            if weight_rows == 0 {
-                continue;
-            }
-            let workgroups = weight_rows.div_ceil(64);
-            let mut pass = encoder.begin_compute_pass(&Default::default());
-            pass.set_pipeline(&self.pipelines.compute_gain_errors);
-            pass.set_bind_group(0, bg, &[]);
-            pass.dispatch_workgroups(workgroups, 1, 1);
-        }
-
-        self.ctx.queue.submit(std::iter::once(encoder.finish()));
-
-        // Pass 2: values_timestep using precomputed gain_errors
-        let mut encoder = self
-            .ctx
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("timestep_encoder"),
-            });
-
-        for (i, bg) in self.tw_bind_groups.iter().enumerate() {
-            let size = self.buffers.layers[i].size as u32;
-            let workgroups = size.div_ceil(64);
-            let mut pass = encoder.begin_compute_pass(&Default::default());
-            pass.set_pipeline(&self.pipelines.timestep);
-            pass.set_bind_group(0, bg, &[]);
-            pass.dispatch_workgroups(workgroups, 1, 1);
-        }
-
-        self.ctx.queue.submit(std::iter::once(encoder.finish()));
+        self.dispatch_tw(
+            &self.pipelines.compute_gain_errors,
+            "gain_errors_encoder",
+            0,
+            |lb| lb.weight_rows as u32,
+        );
+        self.dispatch_tw(&self.pipelines.timestep, "timestep_encoder", 0, |lb| {
+            lb.size as u32
+        });
     }
 
     /// Download `value_changes` from all layers and return the mean absolute
@@ -408,78 +386,27 @@ impl GpuModelRuntime {
     /// Dispatch passes 1+2 of the weight update: compute gain_errors then
     /// compute weight deltas into the `weight_deltas` buffer (does NOT apply).
     fn dispatch_compute_weight_deltas(&self) {
-        // Pass 1: compute_gain_errors
-        let mut encoder = self
-            .ctx
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("weight_gain_errors_encoder"),
-            });
-
-        for i in 1..self.tw_bind_groups.len() {
-            let lb = &self.buffers.layers[i];
-            let weight_rows = lb.weight_rows as u32;
-            if weight_rows == 0 {
-                continue;
-            }
-            let workgroups: u32 = weight_rows.div_ceil(64);
-
-            let mut pass = encoder.begin_compute_pass(&Default::default());
-            pass.set_pipeline(&self.pipelines.compute_gain_errors);
-            pass.set_bind_group(0, &self.tw_bind_groups[i], &[]);
-            pass.dispatch_workgroups(workgroups, 1, 1);
-        }
-
-        self.ctx.queue.submit(std::iter::once(encoder.finish()));
-
-        // Pass 2: compute_weight_deltas
-        let mut encoder = self
-            .ctx
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("weight_deltas_encoder"),
-            });
-
-        for i in 1..self.tw_bind_groups.len() {
-            let lb = &self.buffers.layers[i];
-            let total_weights = (lb.weight_rows * lb.weight_cols) as u32;
-            if total_weights == 0 {
-                continue;
-            }
-            let workgroups = total_weights.div_ceil(64);
-
-            let mut pass = encoder.begin_compute_pass(&Default::default());
-            pass.set_pipeline(&self.pipelines.compute_weight_deltas);
-            pass.set_bind_group(0, &self.tw_bind_groups[i], &[]);
-            pass.dispatch_workgroups(workgroups, 1, 1);
-        }
-
-        self.ctx.queue.submit(std::iter::once(encoder.finish()));
+        self.dispatch_tw(
+            &self.pipelines.compute_gain_errors,
+            "weight_gain_errors",
+            1,
+            |lb| lb.weight_rows as u32,
+        );
+        self.dispatch_tw(
+            &self.pipelines.compute_weight_deltas,
+            "weight_deltas",
+            1,
+            |lb| (lb.weight_rows * lb.weight_cols) as u32,
+        );
     }
 
     fn dispatch_apply_weight_deltas(&self) {
-        let mut encoder = self
-            .ctx
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("apply_weight_deltas_encoder"),
-            });
-
-        for i in 1..self.tw_bind_groups.len() {
-            let lb = &self.buffers.layers[i];
-            let total_weights = (lb.weight_rows * lb.weight_cols) as u32;
-            if total_weights == 0 {
-                continue;
-            }
-            let workgroups = total_weights.div_ceil(64);
-
-            let mut pass = encoder.begin_compute_pass(&Default::default());
-            pass.set_pipeline(&self.pipelines.apply_weight_deltas);
-            pass.set_bind_group(0, &self.tw_bind_groups[i], &[]);
-            pass.dispatch_workgroups(workgroups, 1, 1);
-        }
-
-        self.ctx.queue.submit(std::iter::once(encoder.finish()));
+        self.dispatch_tw(
+            &self.pipelines.apply_weight_deltas,
+            "apply_weight_deltas",
+            1,
+            |lb| (lb.weight_rows * lb.weight_cols) as u32,
+        );
     }
 
     // -------------------------------------------------------------------
@@ -503,59 +430,24 @@ impl GpuModelRuntime {
     /// This computes the weight deltas for the current sample and adds
     /// them to the accumulation buffer without applying to the weights.
     pub fn accumulate_weight_deltas_on_device(&self) {
-        // Pass 1 and 2: compute gain_errors and weight_deltas
         self.dispatch_compute_weight_deltas();
-
-        // Pass 3: accumulate into weight_deltas_accum
-        let mut encoder = self
-            .ctx
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("accumulate_weight_deltas_encoder"),
-            });
-
-        for i in 1..self.tw_bind_groups.len() {
-            let lb = &self.buffers.layers[i];
-            let total_weights: u32 = (lb.weight_rows * lb.weight_cols) as u32;
-            if total_weights == 0 {
-                continue;
-            }
-            let workgroups: u32 = total_weights.div_ceil(64);
-
-            let mut pass = encoder.begin_compute_pass(&Default::default());
-            pass.set_pipeline(&self.pipelines.accumulate_weight_deltas);
-            pass.set_bind_group(0, &self.tw_bind_groups[i], &[]);
-            pass.dispatch_workgroups(workgroups, 1, 1);
-        }
-
-        self.ctx.queue.submit(std::iter::once(encoder.finish()));
+        self.dispatch_tw(
+            &self.pipelines.accumulate_weight_deltas,
+            "accumulate_weight_deltas",
+            1,
+            |lb| (lb.weight_rows * lb.weight_cols) as u32,
+        );
     }
 
     /// Apply the accumulated weight deltas to the weight matrices.
     /// Call once at the end of a minibatch.
     pub fn apply_accumulated_weight_deltas(&self) {
-        let mut encoder = self
-            .ctx
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("apply_accumulated_weight_deltas_encoder"),
-            });
-
-        for i in 1..self.tw_bind_groups.len() {
-            let lb = &self.buffers.layers[i];
-            let total_weights = (lb.weight_rows * lb.weight_cols) as u32;
-            if total_weights == 0 {
-                continue;
-            }
-            let workgroups = total_weights.div_ceil(64);
-
-            let mut pass = encoder.begin_compute_pass(&Default::default());
-            pass.set_pipeline(&self.pipelines.apply_accumulated_weight_deltas);
-            pass.set_bind_group(0, &self.tw_bind_groups[i], &[]);
-            pass.dispatch_workgroups(workgroups, 1, 1);
-        }
-
-        self.ctx.queue.submit(std::iter::once(encoder.finish()));
+        self.dispatch_tw(
+            &self.pipelines.apply_accumulated_weight_deltas,
+            "apply_accumulated_weight_deltas",
+            1,
+            |lb| (lb.weight_rows * lb.weight_cols) as u32,
+        );
     }
 
     /// Overwrite the `alpha` parameter in the GPU params uniform buffer.

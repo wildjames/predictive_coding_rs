@@ -5,7 +5,7 @@ use crate::{
         CpuModelRuntime, ModelRuntime, PredictiveCodingModel, TrainableModelRuntime,
         WeightUpdateSet,
     },
-    training::TrainConfig,
+    training::{TrainConfig, log_training_progress},
 };
 
 use super::impl_handler_delegation;
@@ -139,9 +139,6 @@ impl_handler_delegation!(CpuBatchTrainHandler, runtime, {
             step, mean_step_time
         );
 
-        let est_time_to_finish = mean_step_time * (self.config.training_steps - step) as i32;
-        let est_finish_time = chrono::Utc::now() + est_time_to_finish;
-
         // The mini batch model is cloned for each batch element, so the main model never gets
         // inference run on it. Do a forward pass here to report current energy.
         let (input, output) = self.data.get_random_input_and_output();
@@ -153,11 +150,11 @@ impl_handler_delegation!(CpuBatchTrainHandler, runtime, {
         self.runtime.converge_values()?;
 
         let energy = self.runtime.total_energy()?;
-        info!(
-            "Step {}: Current model state: energy = {:.2}\tEstimated finish time: {}",
+        log_training_progress(
             step,
+            self.config.training_steps - step,
+            mean_step_time,
             energy,
-            est_finish_time.format("%Y-%m-%d %H:%M:%S")
         );
         Ok(())
     }
