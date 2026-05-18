@@ -41,7 +41,7 @@ impl GpuContext {
                 required_limits: wgpu::Limits {
                     // The timestep_weight bind group layout uses 10 storage buffers
                     // (plus 1 uniform), exceeding the default limit of 8.
-                    max_storage_buffers_per_shader_stage: 11,
+                    max_storage_buffers_per_shader_stage: 10,
                     ..wgpu::Limits::default()
                 },
                 ..Default::default()
