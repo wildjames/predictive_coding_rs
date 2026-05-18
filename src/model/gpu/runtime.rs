@@ -29,6 +29,9 @@ pub struct GpuModelRuntime {
     /// Predict/error bind groups - one per adjacent layer pair (len = num_layers - 1).
     /// pe_bind_groups[i] binds upper=layer[i+1], lower=layer[i].
     pe_bind_groups: Vec<wgpu::BindGroup>,
+    /// Bind group for the top layer (uses top layer as both upper and lower).
+    /// Pre-built to avoid per-iteration allocation in the convergence loop.
+    pe_top_bind_group: wgpu::BindGroup,
     /// Timestep/weight-update bind groups - one per layer (len = num_layers).
     /// tw_bind_groups[i] operates on layer[i] as the "upper" layer.
     /// For layer 0, lower_errors is a dummy buffer (rhs will be 0).
@@ -59,6 +62,7 @@ impl GpuModelRuntime {
 
         let pe_bind_groups: Vec<wgpu::BindGroup> =
             Self::build_pe_bind_groups(&ctx, &layouts, &buffers);
+        let pe_top_bind_group = Self::build_pe_top_bind_group(&ctx, &layouts, &buffers);
         let tw_bind_groups: Vec<wgpu::BindGroup> =
             Self::build_tw_bind_groups(&ctx, &layouts, &buffers);
 
@@ -79,6 +83,7 @@ impl GpuModelRuntime {
             layouts,
             pipelines,
             pe_bind_groups,
+            pe_top_bind_group,
             tw_bind_groups,
             rt,
         })
@@ -130,6 +135,24 @@ impl GpuModelRuntime {
             ));
         }
         groups
+    }
+
+    /// Build the top-layer bind group (top layer as both upper and lower).
+    fn build_pe_top_bind_group(
+        ctx: &Arc<GpuContext>,
+        layouts: &PcBindGroupLayouts,
+        buffers: &ModelBuffers,
+    ) -> wgpu::BindGroup {
+        let top_idx = buffers.layers.len() - 1;
+        create_predict_error_bind_group(
+            ctx,
+            layouts,
+            &buffers.layers[top_idx],
+            &buffers.layers[top_idx],
+            &buffers.error_sum,
+            &buffers.params,
+            "pe_top_layer",
+        )
     }
 
     /// Build timestep/weight-update bind groups - one per layer.
@@ -219,25 +242,14 @@ impl GpuModelRuntime {
         }
 
         // The top layer also needs to have its errors computed, but has no pair bind group.
-        // Since the error computation only touches the lower layer, we can make a special
-        // bind group that uses the top layer values as both upper and lower, and the kernel will
-        // only use the lower layer values to compute the errors.
+        // We use the pre-built top-layer bind group (top layer as both upper and lower).
         let top_idx = self.buffers.layers.len() - 1;
-        let top_bg = create_predict_error_bind_group(
-            &self.ctx,
-            &self.layouts,
-            &self.buffers.layers[top_idx],
-            &self.buffers.layers[top_idx],
-            &self.buffers.error_sum,
-            &self.buffers.params,
-            "pe_top_layer",
-        );
         let lower_size = self.buffers.layers[top_idx].size as u32;
         let workgroups = lower_size.div_ceil(64);
 
         let mut pass = encoder.begin_compute_pass(&Default::default());
         pass.set_pipeline(&self.pipelines.errors);
-        pass.set_bind_group(0, &top_bg, &[]);
+        pass.set_bind_group(0, &self.pe_top_bind_group, &[]);
         pass.dispatch_workgroups(workgroups, 1, 1);
 
         // pass borrowed the encoder, so drop it before submitting the command buffer
@@ -265,25 +277,15 @@ impl GpuModelRuntime {
             pass.dispatch_workgroups(workgroups, 1, 1);
         }
 
-        // Top layer has no pe_bind_group, create a temporary one with the
-        // top layer as both upper and lower (the shader only reads
-        // lower_errors / lower_meta).
+        // Top layer uses the pre-built bind group (top layer as both upper and lower;
+        // the shader only reads lower_errors / lower_meta).
         let top_idx = self.buffers.layers.len() - 1;
-        let top_bg = create_predict_error_bind_group(
-            &self.ctx,
-            &self.layouts,
-            &self.buffers.layers[top_idx],
-            &self.buffers.layers[top_idx],
-            &self.buffers.error_sum,
-            &self.buffers.params,
-            &format!("{label}_top"),
-        );
         let top_size = self.buffers.layers[top_idx].size as u32;
         let workgroups = top_size.div_ceil(64);
 
         let mut pass = encoder.begin_compute_pass(&Default::default());
         pass.set_pipeline(pipeline);
-        pass.set_bind_group(0, &top_bg, &[]);
+        pass.set_bind_group(0, &self.pe_top_bind_group, &[]);
         pass.dispatch_workgroups(workgroups, 1, 1);
         drop(pass);
 

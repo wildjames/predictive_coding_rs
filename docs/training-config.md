@@ -168,7 +168,7 @@ This is the simplest strategy and useful for debugging or small experiments.
 
 Requires `--features gpu`.
 
-Follows the same one-sample-per-step loop as `CpuSingleThread`, but every operation (predict, error, convergence, weight update) is dispatched as wgpu compute shaders on the GPU. No intermediate data is read back to the CPU.
+Follows the same one-sample-per-step loop as `CpuSingleThread`, but every operation (predict, error, convergence, weight update) is dispatched as wgpu compute shaders on the GPU. However, some intermediate data is still moved back to the CPU for decisions on convergence and reporting.
 
 #### GPU mini-batch
 

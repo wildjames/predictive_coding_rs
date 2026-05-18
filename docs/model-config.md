@@ -139,7 +139,7 @@ Optional per-element weight delta clipping threshold.
 
 When set, each individual weight update element is clamped to `[-weight_clip, +weight_clip]` before being applied. This prevents single outlier training samples from causing disproportionately large weight changes that can trigger a runaway positive feedback loop that leads to diverging model parameters.
 
-Omit or set to `null` to disable clipping. A reasonable starting value is to take 5x the learning rate.
+Omit or set to `0.0` to disable clipping. A reasonable starting value is to take 5x the learning rate.
 
 ## How Construction Works
 
