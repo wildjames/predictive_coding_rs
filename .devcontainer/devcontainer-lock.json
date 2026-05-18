@@ -1,0 +1,9 @@
+{
+  "features": {
+    "ghcr.io/prulloac/devcontainer-features/pre-commit:1.0.3": {
+      "version": "1.0.3",
+      "resolved": "ghcr.io/prulloac/devcontainer-features/pre-commit@sha256:cfa0edea30d7b3e530bf1f3b9b3103db5ca123479acaeb382ef29a57e354f947",
+      "integrity": "sha256:cfa0edea30d7b3e530bf1f3b9b3103db5ca123479acaeb382ef29a57e354f947"
+    }
+  }
+}

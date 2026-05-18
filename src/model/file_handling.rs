@@ -30,9 +30,13 @@ pub fn save_model_config(config: &PredictiveCodingModelConfig, filename: &str) -
 }
 
 pub fn save_model_snapshot(model: &PredictiveCodingModel, filename: &str) -> Result<()> {
+    save_snapshot(&model.to_snapshot(), filename)
+}
+
+pub fn save_snapshot(snapshot: &ModelSnapshot, filename: &str) -> Result<()> {
     ensure_parent_dir(filename)?;
 
-    let model_ser = serde_json::to_string(&model.to_snapshot())
+    let model_ser = serde_json::to_string(snapshot)
         .map_err(|source| PredictiveCodingError::json_serialize(filename, source))?;
     std::fs::write(filename, model_ser)
         .map_err(|source| PredictiveCodingError::io("write model snapshot", filename, source))?;
@@ -95,6 +99,7 @@ mod tests {
             convergence_threshold: 0.0,
             convergence_steps: 2,
             activation_function: ActivationFunction::Tanh,
+            weight_clip: 0.0,
         };
 
         assert_eq!(actual, expected);
@@ -145,6 +150,7 @@ mod tests {
             convergence_threshold: 0.0,
             convergence_steps: 2,
             activation_function: ActivationFunction::Relu,
+            weight_clip: 0.0,
         });
 
         model.set_input(array![1.0, 0.0, 0.5, 0.25]);

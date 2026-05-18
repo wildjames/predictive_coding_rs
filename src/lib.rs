@@ -14,6 +14,3 @@ extern crate self as predictive_coding;
 
 #[cfg(test)]
 mod test_utils;
-
-#[cfg(feature = "gpu")]
-pub mod gpu_playground;

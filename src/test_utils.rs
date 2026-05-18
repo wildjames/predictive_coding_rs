@@ -6,11 +6,11 @@ use predictive_coding::{
     data_handling::TrainingDataset,
     error::Result,
     model::{
-        PredictiveCodingModel, PredictiveCodingModelConfig, maths::ActivationFunction,
-        save_model_snapshot,
+        CpuModelRuntime, ModelRuntime, ModelSnapshot, PredictiveCodingModel,
+        PredictiveCodingModelConfig, maths::ActivationFunction, save_snapshot,
     },
     training::{
-        TrainConfig, TrainingHandler, TrainingStrategy,
+        StepProfile, TrainConfig, TrainingHandler, TrainingStrategy,
         configuration::{DataSetSource, ModelSource},
     },
 };
@@ -114,6 +114,7 @@ pub(crate) fn tiny_relu_model() -> PredictiveCodingModel {
         convergence_threshold: 0.0,
         convergence_steps: 1,
         activation_function: ActivationFunction::Relu,
+        weight_clip: 0.0,
     })
 }
 
@@ -132,7 +133,7 @@ pub(crate) fn single_thread_train_config(
             input_idx_file: String::from("unused-images.idx"),
             output_idx_file: String::from("unused-labels.idx"),
         }),
-        training_strategy: TrainingStrategy::SingleThread,
+        training_strategy: TrainingStrategy::CpuSingleThread,
         training_steps,
         report_interval,
         snapshot_interval,
@@ -141,7 +142,7 @@ pub(crate) fn single_thread_train_config(
 
 pub(crate) struct RecordingTrainingHandler {
     config: TrainConfig,
-    model: PredictiveCodingModel,
+    runtime: CpuModelRuntime,
     data: Arc<dyn TrainingDataset>,
     file_output_prefix: String,
     pub(crate) steps: Vec<u32>,
@@ -157,7 +158,7 @@ impl RecordingTrainingHandler {
 
         RecordingTrainingHandler {
             config,
-            model: tiny_relu_model(),
+            runtime: CpuModelRuntime::from_model(tiny_relu_model()),
             data,
             file_output_prefix: output_prefix,
             steps: Vec::new(),
@@ -171,8 +172,20 @@ impl TrainingHandler for RecordingTrainingHandler {
         &self.config
     }
 
-    fn get_model(&mut self) -> &mut PredictiveCodingModel {
-        &mut self.model
+    fn model_snapshot(&mut self) -> Result<ModelSnapshot> {
+        self.runtime.snapshot()
+    }
+
+    fn model_config(&self) -> PredictiveCodingModelConfig {
+        self.runtime.config()
+    }
+
+    fn pin_input(&mut self) -> Result<()> {
+        self.runtime.pin_input()
+    }
+
+    fn pin_output(&mut self) -> Result<()> {
+        self.runtime.pin_output()
     }
 
     fn get_data(&self) -> &dyn TrainingDataset {
@@ -188,10 +201,10 @@ impl TrainingHandler for RecordingTrainingHandler {
         Ok(())
     }
 
-    fn train_step(&mut self, step: u32) -> Result<()> {
+    fn profiled_train_step(&mut self, step: u32) -> Result<StepProfile> {
         self.steps.push(step);
         self.events.push(format!("train_step:{step}"));
-        Ok(())
+        Ok(StepProfile::new())
     }
 
     fn report_hook(&mut self, step: u32, _mean_step_time: Duration) -> Result<()> {
@@ -212,6 +225,7 @@ impl TrainingHandler for RecordingTrainingHandler {
     fn post_training_hook(&mut self) -> Result<()> {
         self.events.push(String::from("post_training"));
         let final_output_path = format!("{}_final_model.json", self.get_file_output_prefix());
-        save_model_snapshot(self.get_model(), &final_output_path)
+        let snapshot = self.model_snapshot()?;
+        save_snapshot(&snapshot, &final_output_path)
     }
 }

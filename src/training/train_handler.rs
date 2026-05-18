@@ -1,19 +1,47 @@
 use chrono::{TimeDelta, Utc};
+use std::time::Duration;
 use tracing::info;
 
 use crate::{
     data_handling::TrainingDataset,
     error::Result,
-    model::{
-        PredictiveCodingModel, PredictiveCodingModelConfig, save_model_config, save_model_snapshot,
-    },
+    model::{ModelSnapshot, PredictiveCodingModelConfig, save_model_config, save_snapshot},
 };
 
 use super::{TrainConfig, save_training_config};
 
+/// Timing breakdown of a single training step, as a sequence of named phases.
+#[derive(Debug, Clone)]
+pub struct StepProfile {
+    pub phases: Vec<(String, Duration)>,
+}
+
+impl StepProfile {
+    pub fn new() -> Self {
+        StepProfile { phases: Vec::new() }
+    }
+
+    pub fn record(&mut self, name: impl Into<String>, duration: Duration) {
+        self.phases.push((name.into(), duration));
+    }
+
+    pub fn total(&self) -> Duration {
+        self.phases.iter().map(|(_, d)| *d).sum()
+    }
+}
+
+impl Default for StepProfile {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub trait TrainingHandler {
     fn get_config(&self) -> &TrainConfig;
-    fn get_model(&mut self) -> &mut PredictiveCodingModel;
+    fn model_snapshot(&mut self) -> Result<ModelSnapshot>;
+    fn model_config(&self) -> PredictiveCodingModelConfig;
+    fn pin_input(&mut self) -> Result<()>;
+    fn pin_output(&mut self) -> Result<()>;
     fn get_data(&self) -> &dyn TrainingDataset;
     fn get_file_output_prefix(&self) -> &String;
 
@@ -21,7 +49,17 @@ pub trait TrainingHandler {
         Ok(())
     }
 
-    fn train_step(&mut self, _step: u32) -> Result<()>;
+    /// Execute one training step, returning per-phase timing breakdown.
+    /// Implement this in handlers to define the training logic with profiling.
+    fn profiled_train_step(&mut self, step: u32) -> Result<StepProfile>;
+
+    /// Execute one training step, discarding the profile. Delegates to
+    /// `profiled_train_step` by default.
+    fn train_step(&mut self, step: u32) -> Result<()> {
+        self.profiled_train_step(step)?;
+        Ok(())
+    }
+
     fn report_hook(&mut self, _step: u32, _mean_step_time: TimeDelta) -> Result<()> {
         Ok(())
     }
@@ -35,7 +73,8 @@ pub trait TrainingHandler {
             "Finished training, saving final model to {}",
             final_output_path
         );
-        save_model_snapshot(self.get_model(), &final_output_path)
+        let snapshot = self.model_snapshot()?;
+        save_snapshot(&snapshot, &final_output_path)
     }
 
     // Any actions that need to be called with an awareness of the training step can use these hooks. By default, they do nothing.
@@ -48,12 +87,29 @@ pub trait TrainingHandler {
     }
 }
 
+/// Log training progress: ETA and current energy.
+pub fn log_training_progress(
+    step: u32,
+    remaining_steps: u32,
+    mean_step_time: TimeDelta,
+    energy: f32,
+) {
+    let est_time_to_finish = mean_step_time * remaining_steps as i32;
+    let est_finish_time = Utc::now() + est_time_to_finish;
+    info!(
+        "Step {}: Current model state: energy = {:.2}\tEstimated finish time: {}",
+        step,
+        energy,
+        est_finish_time.format("%Y-%m-%d %H:%M:%S")
+    );
+}
+
 pub fn run_supervised_training_loop(handler: &mut dyn TrainingHandler) -> Result<()> {
     handler.pre_training_hook()?;
 
     // Supervised learning
-    handler.get_model().pin_input();
-    handler.get_model().pin_output();
+    handler.pin_input()?;
+    handler.pin_output()?;
 
     let training_config: &TrainConfig = handler.get_config();
     let training_steps: u32 = training_config.training_steps;
@@ -65,12 +121,13 @@ pub fn run_supervised_training_loop(handler: &mut dyn TrainingHandler) -> Result
         training_steps, report_interval, snapshot_interval
     );
 
-    let model_config: &PredictiveCodingModelConfig = &handler.get_model().get_config();
+    let model_config: PredictiveCodingModelConfig = handler.model_config();
     info!(
-        "Model architecture:\n\tlayer sizes: {:?}\n\tgamma: {}\n\talpha: {}\n\tactivation function: {:?}\n\tconvergence steps: {}\n\tconvergence threshold: {}",
+        "Model architecture:\n\tlayer sizes: {:?}\n\tgamma: {}\n\talpha: {}\n\tweight_clip: {}\n\tactivation function: {:?}\n\tconvergence steps: {}\n\tconvergence threshold: {}",
         model_config.layer_sizes,
         model_config.gamma,
         model_config.alpha,
+        model_config.weight_clip,
         model_config.activation_function,
         model_config.convergence_steps,
         model_config.convergence_threshold
@@ -78,7 +135,7 @@ pub fn run_supervised_training_loop(handler: &mut dyn TrainingHandler) -> Result
 
     // Write the config and training params to a file
     save_model_config(
-        model_config,
+        &model_config,
         &format!("{}_model_config.json", &handler.get_file_output_prefix()),
     )?;
     save_training_config(
@@ -113,7 +170,8 @@ pub fn run_supervised_training_loop(handler: &mut dyn TrainingHandler) -> Result
             );
             info!("Saving model snapshot {}", oname);
 
-            save_model_snapshot(handler.get_model(), &oname)?;
+            let snapshot = handler.model_snapshot()?;
+            save_snapshot(&snapshot, &oname)?;
         }
     }
 

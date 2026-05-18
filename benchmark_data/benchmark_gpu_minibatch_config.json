@@ -15,7 +15,7 @@
     }
   },
   "training_strategy": {
-    "MiniBatch": {
+    "GpuMiniBatch": {
       "batch_size": 8
     }
   },

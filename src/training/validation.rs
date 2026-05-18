@@ -11,10 +11,18 @@ use std::sync::Arc;
 
 pub fn validate_training_config(training_config: &TrainConfig) -> Result<()> {
     match training_config.training_strategy {
-        TrainingStrategy::SingleThread => Ok(()),
-        TrainingStrategy::MiniBatch { batch_size } if batch_size > 0 => Ok(()),
-        TrainingStrategy::MiniBatch { .. } => Err(PredictiveCodingError::validation(
+        TrainingStrategy::CpuSingleThread => Ok(()),
+        TrainingStrategy::CpuMiniBatch { batch_size } if batch_size > 0 => Ok(()),
+        TrainingStrategy::CpuMiniBatch { .. } => Err(PredictiveCodingError::validation(
             "Mini-batch training requires batch_size > 0",
+        )),
+        #[cfg(feature = "gpu")]
+        TrainingStrategy::GpuSingleThread => Ok(()),
+        #[cfg(feature = "gpu")]
+        TrainingStrategy::GpuMiniBatch { batch_size } if batch_size > 0 => Ok(()),
+        #[cfg(feature = "gpu")]
+        TrainingStrategy::GpuMiniBatch { .. } => Err(PredictiveCodingError::validation(
+            "GPU mini-batch training requires batch_size > 0",
         )),
     }
 }
@@ -107,7 +115,7 @@ mod tests {
                 input_idx_file: String::from("unused-images.idx"),
                 output_idx_file: String::from("unused-labels.idx"),
             }),
-            training_strategy: TrainingStrategy::MiniBatch { batch_size: 0 },
+            training_strategy: TrainingStrategy::CpuMiniBatch { batch_size: 0 },
             training_steps: 1,
             report_interval: 0,
             snapshot_interval: 0,
@@ -134,13 +142,13 @@ mod tests {
                 input_idx_file: String::from("unused-images.idx"),
                 output_idx_file: String::from("unused-labels.idx"),
             }),
-            training_strategy: TrainingStrategy::SingleThread,
+            training_strategy: TrainingStrategy::CpuSingleThread,
             training_steps: 1,
             report_interval: 0,
             snapshot_interval: 0,
         };
         let minibatch = TrainConfig {
-            training_strategy: TrainingStrategy::MiniBatch { batch_size: 2 },
+            training_strategy: TrainingStrategy::CpuMiniBatch { batch_size: 2 },
             ..single_thread.clone()
         };
 

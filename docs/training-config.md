@@ -33,7 +33,7 @@ The config is read by `load_training_config`, which deserializes the JSON direct
     }
   },
   "training_strategy": {
-    "MiniBatch": {
+    "CpuMiniBatch": {
       "batch_size": 16
     }
   },
@@ -65,8 +65,9 @@ That means:
 - `model_source` is an object with a single variant key such as `{ "Config": "..." }`.
 - `training_dataset` is an object with a single variant key such as `{ "IdxFormat": { ... } }`.
 - `training_strategy` is either:
-  - the string `"SingleThread"` for the unit variant (no strategy-specific parameters), or
-  - an object such as `{ "MiniBatch": { "batch_size": 16 } }` for the struct variant, which does have strategy-specific parametes.
+  - a string for a unit variant: `"CpuSingleThread"` or `"GpuSingleThread"`,
+  - an object for a struct variant: `{ "CpuMiniBatch": { "batch_size": 16 } }` or `{ "GpuMiniBatch": { "batch_size": 16 } }`.
+  The GPU variants are only available when the crate is built with `--features gpu`.
 
 ## Field-by-Field Reference
 
@@ -126,34 +127,67 @@ The only supported dataset source right now is IDX format, e.g. MNIST:
 
 ### `training_strategy`
 
-Controls how each optimization step is executed.
+Controls how each optimization step is executed and on which backend.
 
-#### Single-threaded training
+There are four variants, two CPU-based and two GPU-based. The GPU variants require the `gpu` feature flag at build time.
+
+#### CPU single-threaded
 
 ```json
-"training_strategy": "SingleThread"
+"training_strategy": "CpuSingleThread"
 ```
 
 - each step selects one random sample from the dataset,
-- the model converges on that sample,
+- the model converges on that sample using CPU (`ndarray`) math,
 - weights are updated immediately.
 
-#### Mini-batch training
+This is the simplest strategy and useful for debugging or small experiments.
+
+#### CPU mini-batch
 
 ```json
 "training_strategy": {
-  "MiniBatch": {
+  "CpuMiniBatch": {
     "batch_size": 16
   }
 }
 ```
 
 - each step clones the current model `batch_size` times,
-- each clone trains on one randomly selected sample,
-- the resulting weight updates are averaged,
-- the averaged update is then applied to the main model.
+- the clones converge on different randomly selected samples **in parallel** using Rayon,
+- the resulting weight updates are collected, summed on CPU, and averaged by `batch_size`,
+- the averaged update is applied to the main model.
 
-`batch_size` is required for the `MiniBatch` variant and is parsed as a `u32`.
+`batch_size` is required and parsed as a `u32`.
+
+#### GPU single-threaded
+
+```json
+"training_strategy": "GpuSingleThread"
+```
+
+Requires `--features gpu`.
+
+Follows the same one-sample-per-step loop as `CpuSingleThread`, but every operation (predict, error, convergence, weight update) is dispatched as wgpu compute shaders on the GPU. However, some intermediate data is still moved back to the CPU for decisions on convergence and reporting.
+
+#### GPU mini-batch
+
+```json
+"training_strategy": {
+  "GpuMiniBatch": {
+    "batch_size": 16
+  }
+}
+```
+
+Requires `--features gpu`.
+
+- each step processes `batch_size` samples sequentially on the GPU,
+- weight deltas are accumulated **on-device** using a dedicated accumulation buffer, avoiding GPU-to-CPU round-trips between samples,
+- the learning rate is pre-scaled by `1/batch_size` so the accumulated deltas are already averaged,
+- a single shader pass applies the accumulated deltas to the weight matrices.
+
+`batch_size` is required and parsed as a `u32`.
 
 ### `training_steps`
 
@@ -212,7 +246,7 @@ Fresh model, single-threaded:
       "output_idx_file": "data/mnist/train-labels-idx1-ubyte"
     }
   },
-  "training_strategy": "SingleThread",
+  "training_strategy": "CpuSingleThread",
   "training_steps": 1000,
   "report_interval": 100,
   "snapshot_interval": 0
@@ -233,7 +267,7 @@ Resume from a saved snapshot:
     }
   },
   "training_strategy": {
-    "MiniBatch": {
+    "CpuMiniBatch": {
       "batch_size": 8
     }
   },

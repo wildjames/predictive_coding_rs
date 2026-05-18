@@ -4,11 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [[bin]]
-name = "gpu_test"
-path = "src/gpu_playground/wgpu_helloworld.rs"
-required-features = ["gpu"]
-
-[[bin]]
 name = "bench"
 path = "src/benchmark.rs"
 
@@ -21,7 +16,6 @@ name = "eval"
 path = "src/evaluate.rs"
 
 [features]
-# GPU support is opt-in to avoid pulling in heavy GPU dependencies for CPU-only builds.
 default = []
 gpu = ["dep:wgpu", "dep:tokio", "dep:bytemuck"]
 

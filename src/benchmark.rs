@@ -1,11 +1,13 @@
 //! This program is used to benchmark the speed of various training configurations and model architectures. It takes a training config file as input, and times its processes, creating a series of files detailing the results.
 
-use std::{path::Path, time::Instant};
+use std::{collections::BTreeMap, path::Path, time::Instant};
 
 use predictive_coding::{
     error::{PredictiveCodingError, Result},
     model::{PredictiveCodingModelConfig, save_model_config},
-    training::{TrainConfig, TrainingHandler, save_training_config, setup_training_run_handler},
+    training::{
+        StepProfile, TrainConfig, TrainingHandler, save_training_config, setup_training_run_handler,
+    },
     utils::{logging, timestamp},
 };
 
@@ -20,7 +22,8 @@ mod test_utils;
 #[derive(Parser)]
 struct BenchArgs {
     /// The model configuration to benchmark.
-    #[arg(default_value_t = String::from("benchmark_data/benchmark_config.json"))]
+    // #[arg(default_value_t = String::from("benchmark_data/benchmark_minibatch_config.json"))]
+    #[arg(default_value_t = String::from("benchmark_data/benchmark_gpu_singlethread_config.json"))]
     config: String,
 
     /// Optional artifact output prefix. Defaults to `benchmark_data/<timestamp>/benchmark`.
@@ -69,11 +72,35 @@ fn run_benchmark(args: BenchArgs) -> Result<()> {
         &format!("{}_{}", &args.output_prefix, "bench_run.csv"),
     )?;
 
+    // Compute per-phase summary
+    let phase_summary = compute_phase_summary(&step_data);
+
+    // Print summary to console
+    info!("--- Benchmark Phase Summary ---");
+    let total_wall: f32 = step_data.iter().map(|s| s.total_ms).sum();
+    info!(
+        "Total wall time: {:.1} ms over {} steps ({:.1} ms/step avg)",
+        total_wall,
+        step_data.len(),
+        if step_data.is_empty() {
+            0.0
+        } else {
+            total_wall / step_data.len() as f32
+        }
+    );
+    for (name, s) in &phase_summary {
+        info!(
+            "  {:<25} mean={:>8.2}ms  min={:>8.2}ms  max={:>8.2}ms  total={:>10.1}ms  ({:.1}%)",
+            name, s.mean_ms, s.min_ms, s.max_ms, s.total_ms, s.pct_of_total
+        );
+    }
+
     // Write the training params to "{output_prefix}/params.json"
     let current_commit_hash_str: String = current_git_commit_hash()?;
 
     let result = BenchmarkResult {
         step_data,
+        phase_summary,
         git_commit_hash: current_commit_hash_str,
         run_timestamp: chrono::Utc::now().to_rfc3339(),
         release_mode,
@@ -100,6 +127,7 @@ fn main() -> Result<()> {
 #[derive(serde::Serialize)]
 struct BenchmarkResult {
     step_data: Vec<BenchmarkStepData>,
+    phase_summary: BTreeMap<String, PhaseSummary>,
     git_commit_hash: String,
     run_timestamp: String,
     release_mode: bool,
@@ -108,7 +136,17 @@ struct BenchmarkResult {
 #[derive(serde::Serialize)]
 struct BenchmarkStepData {
     step: u32,
-    time_ms: f32,
+    total_ms: f32,
+    phases: BTreeMap<String, f32>,
+}
+
+#[derive(serde::Serialize)]
+struct PhaseSummary {
+    mean_ms: f32,
+    min_ms: f32,
+    max_ms: f32,
+    total_ms: f32,
+    pct_of_total: f32,
 }
 
 fn run_benchmark_training_loop(
@@ -131,17 +169,14 @@ fn run_benchmark_training_loop(
     let mut wtr = csv::Writer::from_path(bench_run_outfile).map_err(|source| {
         PredictiveCodingError::csv("create benchmark writer", bench_run_outfile, source)
     })?;
-    wtr.write_record(["step", "time_ms"]).map_err(|source| {
-        PredictiveCodingError::csv("write benchmark header", bench_run_outfile, source)
-    })?;
 
     let training_config: &TrainConfig = handler.get_config();
     let training_steps: u32 = training_config.training_steps;
 
     // Write the config and training params to a file
-    let model_config: &PredictiveCodingModelConfig = &handler.get_model().get_config();
+    let model_config: PredictiveCodingModelConfig = handler.model_config();
     save_model_config(
-        model_config,
+        &model_config,
         &format!("{}_model_config.json", &handler.get_file_output_prefix()),
     )?;
     save_training_config(
@@ -149,34 +184,120 @@ fn run_benchmark_training_loop(
         &format!("{}_training_config.json", &handler.get_file_output_prefix()),
     )?;
 
+    // We discover phase names from the first step's profile, then use a
+    // consistent column order for the CSV.
+    let mut phase_names: Vec<String> = Vec::new();
+    let mut header_written = false;
+
     for step in 0..training_steps {
         let start_time: Instant = Instant::now();
         handler.pre_step_hook(step)?;
-        handler.train_step(step)?;
+        let profile: StepProfile = handler.profiled_train_step(step)?;
         handler.post_step_hook(step)?;
-        let elapsed_time = start_time.elapsed();
+        let wall_time = start_time.elapsed();
 
-        let elapsed_time_ms: f32 = elapsed_time.as_secs_f32() * 1000.0;
+        let wall_time_ms: f32 = wall_time.as_secs_f32() * 1000.0;
 
-        benchmark_data.push(BenchmarkStepData {
-            step,
-            time_ms: elapsed_time_ms,
-        });
-
-        wtr.write_record(&[step.to_string(), elapsed_time_ms.to_string()])
-            .map_err(|source| {
-                PredictiveCodingError::csv("append benchmark row", bench_run_outfile, source)
+        // On the first step, discover phase names and write the CSV header
+        if !header_written {
+            phase_names = profile
+                .phases
+                .iter()
+                .map(|(name, _)| name.clone())
+                .collect();
+            let mut header: Vec<String> = vec!["step".into(), "total_ms".into()];
+            for name in &phase_names {
+                header.push(format!("{}_ms", name));
+            }
+            wtr.write_record(&header).map_err(|source| {
+                PredictiveCodingError::csv("write benchmark header", bench_run_outfile, source)
             })?;
+            header_written = true;
+        }
+
+        // Build phase timing map
+        let mut phases: BTreeMap<String, f32> = BTreeMap::new();
+        for (name, dur) in &profile.phases {
+            phases.insert(name.clone(), dur.as_secs_f32() * 1000.0);
+        }
+
+        // Write CSV row
+        let mut row: Vec<String> = vec![step.to_string(), format!("{:.3}", wall_time_ms)];
+        for name in &phase_names {
+            row.push(format!("{:.3}", phases.get(name).copied().unwrap_or(0.0)));
+        }
+        wtr.write_record(&row).map_err(|source| {
+            PredictiveCodingError::csv("append benchmark row", bench_run_outfile, source)
+        })?;
         wtr.flush().map_err(|source| {
             PredictiveCodingError::io("flush benchmark CSV", bench_run_outfile, source)
         })?;
 
-        info!("Step {}: time {:.1} ms", step, elapsed_time_ms,);
+        // Log with phase breakdown
+        let phase_str: String = profile
+            .phases
+            .iter()
+            .map(|(name, dur)| format!("{}={:.1}ms", name, dur.as_secs_f32() * 1000.0))
+            .collect::<Vec<_>>()
+            .join("  ");
+        info!(
+            "Step {}: total {:.1} ms  [{}]",
+            step, wall_time_ms, phase_str
+        );
+
+        benchmark_data.push(BenchmarkStepData {
+            step,
+            total_ms: wall_time_ms,
+            phases,
+        });
     }
 
     handler.post_training_hook()?;
 
     Ok(benchmark_data)
+}
+
+/// Compute per-phase summary statistics from the step data.
+fn compute_phase_summary(step_data: &[BenchmarkStepData]) -> BTreeMap<String, PhaseSummary> {
+    if step_data.is_empty() {
+        return BTreeMap::new();
+    }
+
+    // Collect all phase names
+    let mut all_phases: BTreeMap<String, Vec<f32>> = BTreeMap::new();
+    let mut total_wall_ms: f32 = 0.0;
+
+    for step in step_data {
+        total_wall_ms += step.total_ms;
+        for (name, &ms) in &step.phases {
+            all_phases.entry(name.clone()).or_default().push(ms);
+        }
+    }
+
+    let mut summary = BTreeMap::new();
+    for (name, times) in &all_phases {
+        let total: f32 = times.iter().sum();
+        let mean = total / times.len() as f32;
+        let min = times.iter().copied().fold(f32::INFINITY, f32::min);
+        let max = times.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        let pct = if total_wall_ms > 0.0 {
+            (total / total_wall_ms) * 100.0
+        } else {
+            0.0
+        };
+        summary.insert(
+            name.clone(),
+            PhaseSummary {
+                mean_ms: mean,
+                min_ms: min,
+                max_ms: max,
+                total_ms: total,
+                pct_of_total: pct,
+            },
+        );
+    }
+
+    summary
 }
 
 #[cfg(test)]
@@ -228,9 +349,9 @@ mod tests {
         assert!(Path::new(&format!("{}_final_model.json", output_prefix)).exists());
 
         let csv_output = fs::read_to_string(bench_csv).unwrap();
-        assert!(csv_output.contains("step,time_ms"));
-        assert!(csv_output.contains("0,"));
-        assert!(csv_output.contains("1,"));
+        assert!(csv_output.contains("step,total_ms"));
+        assert!(csv_output.contains("\n0,"));
+        assert!(csv_output.contains("\n1,"));
     }
 
     #[test]

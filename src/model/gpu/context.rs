@@ -18,7 +18,6 @@ impl GpuContext {
     /// This is async because wgpu adapter/device negotiation is async.
     pub async fn new() -> Result<Arc<Self>> {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::all(),
             ..Default::default()
         });
 
@@ -39,7 +38,12 @@ impl GpuContext {
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("predictive_coding_device"),
                 required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::default(),
+                required_limits: wgpu::Limits {
+                    // The timestep_weight bind group layout uses 10 storage buffers
+                    // (plus 1 uniform), exceeding the default limit of 8.
+                    max_storage_buffers_per_shader_stage: 10,
+                    ..wgpu::Limits::default()
+                },
                 ..Default::default()
             })
             .await

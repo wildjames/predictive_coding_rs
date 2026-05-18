@@ -7,10 +7,15 @@ use super::{context::GpuContext, layout::PcBindGroupLayouts};
 pub struct PcPipelines {
     pub predict: wgpu::ComputePipeline,
     pub errors: wgpu::ComputePipeline,
+    pub sum_error_sq: wgpu::ComputePipeline,
+    pub sum_error: wgpu::ComputePipeline,
     pub compute_gain_errors: wgpu::ComputePipeline,
     pub timestep: wgpu::ComputePipeline,
     pub compute_weight_deltas: wgpu::ComputePipeline,
     pub apply_weight_deltas: wgpu::ComputePipeline,
+    pub sum_value_change: wgpu::ComputePipeline,
+    pub accumulate_weight_deltas: wgpu::ComputePipeline,
+    pub apply_accumulated_weight_deltas: wgpu::ComputePipeline,
 }
 
 impl PcPipelines {
@@ -67,6 +72,8 @@ impl PcPipelines {
         Self {
             predict: make_pe("compute_predictions", "predict_pipeline"),
             errors: make_pe("compute_errors", "errors_pipeline"),
+            sum_error_sq: make_pe("reduce_error_sq", "sum_error_sq_pipeline"),
+            sum_error: make_pe("reduce_error", "sum_error_pipeline"),
             compute_gain_errors: make_tw("compute_gain_errors", "compute_gain_errors_pipeline"),
             timestep: make_tw("values_timestep", "timestep_pipeline"),
             compute_weight_deltas: make_tw(
@@ -74,6 +81,15 @@ impl PcPipelines {
                 "compute_weight_deltas_pipeline",
             ),
             apply_weight_deltas: make_tw("apply_weight_deltas", "apply_weight_deltas_pipeline"),
+            sum_value_change: make_tw("reduce_value_change", "sum_value_change_pipeline"),
+            accumulate_weight_deltas: make_tw(
+                "accumulate_weight_deltas",
+                "accumulate_weight_deltas_pipeline",
+            ),
+            apply_accumulated_weight_deltas: make_tw(
+                "apply_accumulated_weight_deltas",
+                "apply_accumulated_weight_deltas_pipeline",
+            ),
         }
     }
 }

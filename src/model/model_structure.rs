@@ -108,6 +108,8 @@ pub struct PredictiveCodingModel {
     pub gamma: f32, // neural learning rate
     pub convergence_threshold: f32,
     pub convergence_steps: u32,
+    #[serde(default)]
+    pub weight_clip: f32,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -118,6 +120,11 @@ pub struct PredictiveCodingModelConfig {
     pub convergence_threshold: f32,
     pub convergence_steps: u32,
     pub activation_function: ActivationFunction,
+    /// Per-element weight delta clipping threshold.
+    /// Each weight update element is clamped to [-clip, +clip].
+    /// Set to 0.0 to disable clipping.
+    #[serde(default)]
+    pub weight_clip: f32,
 }
 
 impl PredictiveCodingModel {
@@ -150,6 +157,7 @@ impl PredictiveCodingModel {
             gamma: config.gamma,
             convergence_threshold: config.convergence_threshold,
             convergence_steps: config.convergence_steps,
+            weight_clip: config.weight_clip,
         }
     }
 
@@ -163,6 +171,7 @@ impl PredictiveCodingModel {
             convergence_threshold: self.convergence_threshold,
             // I only allow that all layers have the same activation function
             activation_function: self.layers.first().unwrap().activation_function,
+            weight_clip: self.weight_clip,
         }
     }
 
@@ -246,6 +255,7 @@ impl PredictiveCodingModel {
             gamma: snapshot.config.gamma,
             convergence_threshold: snapshot.config.convergence_threshold,
             convergence_steps: snapshot.config.convergence_steps,
+            weight_clip: snapshot.config.weight_clip,
         })
     }
 
@@ -415,6 +425,7 @@ mod tests {
             convergence_threshold: 0.0,
             convergence_steps: 2,
             activation_function: ActivationFunction::Relu,
+            weight_clip: 0.0,
         });
 
         let snapshot = model.to_snapshot();
