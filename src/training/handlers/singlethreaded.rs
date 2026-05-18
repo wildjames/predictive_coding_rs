@@ -4,9 +4,8 @@ use crate::{
     data_handling::TrainingDataset,
     error::Result,
     model::{ModelSnapshot, PredictiveCodingModelConfig, TrainableModelRuntime},
+    training::{TrainConfig, TrainingHandler},
 };
-
-use super::{TrainConfig, TrainingHandler};
 
 use chrono::TimeDelta;
 use std::sync::Arc;
@@ -109,13 +108,10 @@ impl<R: TrainableModelRuntime> TrainingHandler for SingleThreadTrainHandler<R> {
             step, mean_step_time
         );
 
-        // Estimate how much longer needed to complete the training
-        let est_time_to_finish: chrono::Duration =
-            mean_step_time * (self.config.training_steps - step) as i32;
-        let est_finish_time: chrono::DateTime<chrono::Utc> =
-            chrono::Utc::now() + est_time_to_finish;
+        let est_time_to_finish = mean_step_time * (self.config.training_steps - step) as i32;
+        let est_finish_time = chrono::Utc::now() + est_time_to_finish;
 
-        let energy: f32 = self.runtime.total_energy()?;
+        let energy = self.runtime.total_energy()?;
         info!(
             "Step {}: Current model state: energy = {:.2}\tEstimated finish time: {}",
             step,

@@ -2,12 +2,13 @@ use crate::{
     data_handling::TrainingDataset,
     error::Result,
     model::{
-        CpuModelRuntime, ModelRuntime, ModelSnapshot, PredictiveCodingModel,
-        PredictiveCodingModelConfig, TrainableModelRuntime, WeightUpdateSet,
+        CpuModelRuntime, ModelRuntime, PredictiveCodingModel, TrainableModelRuntime,
+        WeightUpdateSet,
     },
+    training::TrainConfig,
 };
 
-use super::{TrainConfig, TrainingHandler};
+use super::impl_handler_delegation;
 
 use chrono::TimeDelta;
 use ndarray::{Array1, Array2};
@@ -44,30 +45,7 @@ impl CpuBatchTrainHandler {
     }
 }
 
-impl TrainingHandler for CpuBatchTrainHandler {
-    fn get_config(&self) -> &TrainConfig {
-        &self.config
-    }
-    fn model_snapshot(&mut self) -> Result<ModelSnapshot> {
-        self.runtime.snapshot()
-    }
-    fn model_config(&self) -> PredictiveCodingModelConfig {
-        self.runtime.config()
-    }
-    fn pin_input(&mut self) -> Result<()> {
-        self.runtime.pin_input()
-    }
-    fn pin_output(&mut self) -> Result<()> {
-        self.runtime.pin_output()
-    }
-    fn get_data(&self) -> &dyn TrainingDataset {
-        self.data.as_ref()
-    }
-    fn get_file_output_prefix(&self) -> &String {
-        &self.file_output_prefix
-    }
-
-    /// Report the training parameters and model config. Also save setup to file for future reference
+impl_handler_delegation!(CpuBatchTrainHandler, runtime, {
     fn pre_training_hook(&mut self) -> Result<()> {
         info!("Starting training with mini-batch strategy");
         info!("Mini batch params: batch size = {}", self.batch_size);
@@ -78,16 +56,12 @@ impl TrainingHandler for CpuBatchTrainHandler {
         let mut profile = StepProfile::new();
 
         let t = Instant::now();
-        // I'll iterate over this with Rayon to parallelise the batch
         let batch_inputs_and_outputs: Vec<(Array1<f32>, Array1<f32>)> = (0..self.batch_size)
             .map(|_| self.data.get_random_input_and_output())
             .collect();
         profile.record("prepare_batch_data", t.elapsed());
 
         let t = Instant::now();
-        // Each element of the batch trains on a single sample, and we collect their weight changes as a result.
-        // The batch weight changes will be a Vec of length batch_size, where each element is a Vec of length
-        // num_layers, and each element of THAT is an array2 of the weight changes for the relevant layer.
         let batch_weight_changes: Vec<Result<WeightUpdateSet>> = batch_inputs_and_outputs
             .into_par_iter()
             .map(|(input_data, output_data)| {
@@ -95,21 +69,14 @@ impl TrainingHandler for CpuBatchTrainHandler {
                     "Training on batch element with input {:?} and output {:?}",
                     input_data, output_data
                 );
-                // Each thread gets its own runtime clone, and trains it independently
-                let mut runtime_clone: CpuModelRuntime =
-                    CpuModelRuntime::from_model(self.runtime.model().clone());
+                let mut runtime_clone = CpuModelRuntime::from_model(self.runtime.model().clone());
 
-                // Set the model input and output to the batch element's data
                 runtime_clone.model_mut().set_input(input_data);
                 runtime_clone.model_mut().set_output(output_data);
-
                 runtime_clone.reinitialise_latents()?;
-
-                // Train on this example until convergence.
                 runtime_clone.converge_values()?;
 
-                let updates: WeightUpdateSet = runtime_clone.compute_weight_updates()?;
-                Ok(updates)
+                runtime_clone.compute_weight_updates()
             })
             .collect();
         debug!(
@@ -119,12 +86,10 @@ impl TrainingHandler for CpuBatchTrainHandler {
         profile.record("parallel_converge", t.elapsed());
 
         let t = Instant::now();
-        // Unwrap results and collect into Vec<WeightUpdateSet>
         let successful_updates: Vec<WeightUpdateSet> = batch_weight_changes
             .into_iter()
             .collect::<Result<Vec<_>>>()?;
 
-        // Reconstruct Array2s from the first element to initialise the sum
         let first = &successful_updates[0];
         let mut sum_batch_weight_changes: Vec<Array2<f32>> = first
             .updates
@@ -135,7 +100,6 @@ impl TrainingHandler for CpuBatchTrainHandler {
             })
             .collect();
 
-        // Accumulate remaining updates
         for update_set in &successful_updates[1..] {
             for (sum, (data, &(rows, cols))) in sum_batch_weight_changes
                 .iter_mut()
@@ -146,7 +110,6 @@ impl TrainingHandler for CpuBatchTrainHandler {
             }
         }
 
-        // Average the weight changes across the batch
         let avg_batch_weight_changes: Vec<Array2<f32>> = sum_batch_weight_changes
             .into_iter()
             .map(|sum_weight_change| sum_weight_change / self.batch_size as f32)
@@ -154,7 +117,6 @@ impl TrainingHandler for CpuBatchTrainHandler {
         profile.record("aggregate_updates", t.elapsed());
 
         let t = Instant::now();
-        // Apply the average weight changes to the model.
         let updates = WeightUpdateSet {
             updates: avg_batch_weight_changes
                 .iter()
@@ -177,14 +139,11 @@ impl TrainingHandler for CpuBatchTrainHandler {
             step, mean_step_time
         );
 
-        // Estimate how much longer needed to complete the training
-        let est_time_to_finish: chrono::Duration =
-            mean_step_time * (self.config.training_steps - step) as i32;
-        let est_finish_time: chrono::DateTime<chrono::Utc> =
-            chrono::Utc::now() + est_time_to_finish;
+        let est_time_to_finish = mean_step_time * (self.config.training_steps - step) as i32;
+        let est_finish_time = chrono::Utc::now() + est_time_to_finish;
 
-        // The mini batch model is cloned for each batch element, so the main model never gets inference run on it
-        // So, do that in the reporting step to get a sense of how the model is doing on the data.
+        // The mini batch model is cloned for each batch element, so the main model never gets
+        // inference run on it. Do a forward pass here to report current energy.
         let (input, output) = self.data.get_random_input_and_output();
         self.runtime
             .set_input(input.as_slice().expect("contiguous input array"))?;
@@ -193,7 +152,7 @@ impl TrainingHandler for CpuBatchTrainHandler {
         self.runtime.reinitialise_latents()?;
         self.runtime.converge_values()?;
 
-        let energy: f32 = self.runtime.total_energy()?;
+        let energy = self.runtime.total_energy()?;
         info!(
             "Step {}: Current model state: energy = {:.2}\tEstimated finish time: {}",
             step,
@@ -202,13 +161,14 @@ impl TrainingHandler for CpuBatchTrainHandler {
         );
         Ok(())
     }
-}
+});
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     use crate::test_utils::{DummyTrainingDataset, tiny_relu_model};
+    use crate::training::TrainingHandler;
     use crate::training::configuration::{DataSetSource, ModelSource, TrainingStrategy};
     use crate::training::handlers::singlethreaded::SingleThreadTrainHandler;
     use ndarray::{Array2, array};

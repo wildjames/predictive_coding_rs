@@ -1,10 +1,11 @@
 use crate::{
     data_handling::TrainingDataset,
     error::Result,
-    model::{GpuModelRuntime, ModelRuntime, ModelSnapshot, PredictiveCodingModelConfig},
+    model::{GpuModelRuntime, ModelRuntime},
+    training::TrainConfig,
 };
 
-use super::{TrainConfig, TrainingHandler};
+use super::impl_handler_delegation;
 
 use chrono::TimeDelta;
 use std::sync::Arc;
@@ -41,35 +42,7 @@ impl GpuBatchTrainHandler {
     }
 }
 
-impl TrainingHandler for GpuBatchTrainHandler {
-    fn get_config(&self) -> &TrainConfig {
-        &self.config
-    }
-
-    fn model_snapshot(&mut self) -> Result<ModelSnapshot> {
-        self.gpu_runtime.snapshot()
-    }
-
-    fn model_config(&self) -> PredictiveCodingModelConfig {
-        self.gpu_runtime.config()
-    }
-
-    fn pin_input(&mut self) -> Result<()> {
-        self.gpu_runtime.pin_input()
-    }
-
-    fn pin_output(&mut self) -> Result<()> {
-        self.gpu_runtime.pin_output()
-    }
-
-    fn get_data(&self) -> &dyn TrainingDataset {
-        self.data.as_ref()
-    }
-
-    fn get_file_output_prefix(&self) -> &String {
-        &self.file_output_prefix
-    }
-
+impl_handler_delegation!(GpuBatchTrainHandler, gpu_runtime, {
     fn pre_training_hook(&mut self) -> Result<()> {
         info!(
             "Starting GPU mini-batch training on {}",
@@ -150,7 +123,7 @@ impl TrainingHandler for GpuBatchTrainHandler {
         self.gpu_runtime.reinitialise_latents()?;
         self.gpu_runtime.converge_values()?;
 
-        let energy: f32 = self.gpu_runtime.total_energy()?;
+        let energy = self.gpu_runtime.total_energy()?;
         info!(
             "Step {}: Current model state: energy = {:.2}\tEstimated finish time: {}",
             step,
@@ -159,4 +132,4 @@ impl TrainingHandler for GpuBatchTrainHandler {
         );
         Ok(())
     }
-}
+});

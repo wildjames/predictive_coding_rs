@@ -247,25 +247,20 @@ impl GpuModelRuntime {
         self.ctx.queue.submit(std::iter::once(encoder.finish()));
     }
 
-    /// Dispatch `reduce_error_sq` for every layer in a single encoder submit.
-    ///
-    /// Each layer writes to its own offset in the shared `partial_sums` buffer, so all layers can be
-    /// batched without overwriting each other.
-    fn dispatch_reduce_error_sq(&self) {
+    /// Dispatch a reduction pipeline over all layers using the pe_bind_groups,
+    /// plus a temporary top-layer bind group.
+    fn dispatch_pe_reduction(&self, pipeline: &wgpu::ComputePipeline, label: &str) {
         let mut encoder = self
             .ctx
             .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("reduce_error_sq_encoder"),
-            });
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(label) });
 
-        // Layers 0..N-2 via the existing pe_bind_groups.
         for (i, bg) in self.pe_bind_groups.iter().enumerate() {
             let lower_size = self.buffers.layers[i].size as u32;
             let workgroups = lower_size.div_ceil(64);
 
             let mut pass = encoder.begin_compute_pass(&Default::default());
-            pass.set_pipeline(&self.pipelines.sum_error_sq);
+            pass.set_pipeline(pipeline);
             pass.set_bind_group(0, bg, &[]);
             pass.dispatch_workgroups(workgroups, 1, 1);
         }
@@ -281,13 +276,13 @@ impl GpuModelRuntime {
             &self.buffers.layers[top_idx],
             &self.buffers.error_sum,
             &self.buffers.params,
-            "pe_top_layer_energy",
+            &format!("{label}_top"),
         );
         let top_size = self.buffers.layers[top_idx].size as u32;
         let workgroups = top_size.div_ceil(64);
 
         let mut pass = encoder.begin_compute_pass(&Default::default());
-        pass.set_pipeline(&self.pipelines.sum_error_sq);
+        pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &top_bg, &[]);
         pass.dispatch_workgroups(workgroups, 1, 1);
         drop(pass);
@@ -295,48 +290,14 @@ impl GpuModelRuntime {
         self.ctx.queue.submit(std::iter::once(encoder.finish()));
     }
 
+    /// Dispatch `reduce_error_sq` for every layer in a single encoder submit.
+    fn dispatch_reduce_error_sq(&self) {
+        self.dispatch_pe_reduction(&self.pipelines.sum_error_sq, "reduce_error_sq");
+    }
+
     /// Dispatch `reduce_error` for every layer in a single encoder submit.
-    ///
-    /// Same structure as `dispatch_reduce_error_sq` but sums raw (signed) errors
-    /// instead of squared errors.  Writes into the shared `error_sum` buffer.
     fn dispatch_reduce_error(&self) {
-        let mut encoder = self
-            .ctx
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("reduce_error_encoder"),
-            });
-
-        for (i, bg) in self.pe_bind_groups.iter().enumerate() {
-            let lower_size = self.buffers.layers[i].size as u32;
-            let workgroups = lower_size.div_ceil(64);
-
-            let mut pass = encoder.begin_compute_pass(&Default::default());
-            pass.set_pipeline(&self.pipelines.sum_error);
-            pass.set_bind_group(0, bg, &[]);
-            pass.dispatch_workgroups(workgroups, 1, 1);
-        }
-
-        let top_idx = self.buffers.layers.len() - 1;
-        let top_bg = create_predict_error_bind_group(
-            &self.ctx,
-            &self.layouts,
-            &self.buffers.layers[top_idx],
-            &self.buffers.layers[top_idx],
-            &self.buffers.error_sum,
-            &self.buffers.params,
-            "pe_top_layer_error",
-        );
-        let top_size = self.buffers.layers[top_idx].size as u32;
-        let workgroups = top_size.div_ceil(64);
-
-        let mut pass = encoder.begin_compute_pass(&Default::default());
-        pass.set_pipeline(&self.pipelines.sum_error);
-        pass.set_bind_group(0, &top_bg, &[]);
-        pass.dispatch_workgroups(workgroups, 1, 1);
-        drop(pass);
-
-        self.ctx.queue.submit(std::iter::once(encoder.finish()));
+        self.dispatch_pe_reduction(&self.pipelines.sum_error, "reduce_error");
     }
 
     /// Dispatch `reduce_value_change` for every layer in a single encoder submit.
