@@ -68,6 +68,7 @@ impl_handler_delegation!(GpuBatchTrainHandler, gpu_runtime, {
         let mut total_accumulate = std::time::Duration::ZERO;
 
         // TODO: This executes the batch models serially - this should be parallelised! Needs it's own PR though.
+        // FIXME: This also needs to make sure that the alpha scaling is reset on failures.
         for _ in 0..self.batch_size {
             let t = Instant::now();
             let (input, output) = self.data.get_random_input_and_output();
