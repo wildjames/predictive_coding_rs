@@ -47,6 +47,7 @@ fn make_test_snapshot(layer_sizes: &[usize], activation: ActivationFunction) -> 
         convergence_threshold: 0.001,
         convergence_steps: 50,
         activation_function: activation,
+        weight_clip: 0.0,
     };
     // Build a randomly-initialised model and immediately snapshot it so
     // both backends start from byte-identical state.

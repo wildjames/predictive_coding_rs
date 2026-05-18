@@ -27,7 +27,7 @@ It does not contain trained weights or latent state. It only describes how to co
 
 ## Top-Level Schema
 
-All top-level fields are required:
+Required fields:
 
 - `layer_sizes`
 - `alpha`
@@ -36,7 +36,11 @@ All top-level fields are required:
 - `convergence_steps`
 - `activation_function`
 
-There are no defaults for any of these fields. Omitting one will fail deserialization.
+Optional fields (omit to disable):
+
+- `weight_clip`
+
+There are no defaults for the required fields. Omitting one will fail deserialization.
 
 ## Enum Encoding
 
@@ -124,6 +128,18 @@ The activation is used in two places:
 
 - when predicting the layer below,
 - when computing derivatives for value updates and weight updates.
+
+### `weight_clip`
+
+Optional per-element weight delta clipping threshold.
+
+```json
+"weight_clip": 0.01
+```
+
+When set, each individual weight update element is clamped to `[-weight_clip, +weight_clip]` before being applied. This prevents single outlier training samples from causing disproportionately large weight changes that can trigger a runaway positive feedback loop that leads to diverging model parameters.
+
+Omit or set to `null` to disable clipping. A reasonable starting value is to take 5x the learning rate.
 
 ## How Construction Works
 

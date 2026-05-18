@@ -2,7 +2,7 @@
 // Predictive-coding compute shaders — timestep & weight-update kernels
 //
 // Buffer layout (matches layout.rs PcBindGroupLayouts::timestep_weight):
-//   @group(0) @binding(0)  params               : vec4<f32>   (uniform) [alpha, gamma, conv_thresh, conv_steps]
+//   @group(0) @binding(0)  params               : ModelParams (uniform) {alpha, gamma, conv_thresh, conv_steps, weight_clip}
 //   @group(0) @binding(1)  weight_deltas        : array<f32>  (rw)
 //   @group(0) @binding(2)  gain_errors          : array<f32>  (rw)
 //   @group(0) @binding(3)  upper_meta           : array<u32>  (read)  [pinned, activation_fn, size, weight_rows, weight_cols, is_top_level]
@@ -22,7 +22,19 @@ const ACTIVATION_TANH: u32    = 2u;
 
 // ---- bindings -------------------------------------------------------------
 
-@group(0) @binding(0) var<uniform>             params               : vec4<f32>;
+// Needs to be 16-byte aligned for uniform buffer, so we have some padding.
+struct ModelParams {
+    alpha: f32,
+    gamma: f32,
+    conv_thresh: f32,
+    conv_steps: f32,
+    weight_clip: f32,
+    _pad1: f32,
+    _pad2: f32,
+    _pad3: f32,
+}
+
+@group(0) @binding(0) var<uniform>             params               : ModelParams;
 @group(0) @binding(1) var<storage, read_write> weight_deltas        : array<f32>;
 @group(0) @binding(2) var<storage, read_write> gain_errors          : array<f32>;
 @group(0) @binding(3) var<storage, read>       upper_meta           : array<u32>;
@@ -118,7 +130,7 @@ fn values_timestep(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    let gamma       = params.y;
+    let gamma       = params.gamma;
     let is_top      = upper_meta[5];
     let weight_rows = upper_meta[3]; // == lower_size
     let weight_cols = upper_meta[4]; // == upper_size
@@ -163,8 +175,14 @@ fn compute_weight_deltas(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = flat_idx / weight_cols; // row (lower node index)
     let j = flat_idx % weight_cols; // col (upper node index)
 
-    let alpha = params.x;
-    let delta = alpha * gain_errors[i] * upper_values[j];
+    let alpha = params.alpha;
+    let weight_clip = params.weight_clip;
+    var delta = alpha * gain_errors[i] * upper_values[j];
+
+    // Clip weight deltas when weight_clip > 0
+    if weight_clip > 0.0 {
+        delta = clamp(delta, -weight_clip, weight_clip);
+    }
 
     weight_deltas[flat_idx] = delta;
 }

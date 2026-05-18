@@ -233,11 +233,17 @@ impl ModelBuffers {
             .collect();
 
         // Pack model-level scalars into a uniform buffer.
-        let params_data: [f32; 4] = [
+        // Layout: [alpha, gamma, convergence_threshold, convergence_steps, weight_clip, 0, 0, 0]
+        // Needs to be 16-byte aligned, so some padding is needed here
+        let params_data: [f32; 8] = [
             snapshot.config.alpha,
             snapshot.config.gamma,
             snapshot.config.convergence_threshold,
             snapshot.config.convergence_steps as f32,
+            snapshot.config.weight_clip,
+            0.0,
+            0.0,
+            0.0,
         ];
         let params: wgpu::Buffer = ctx.device.create_buffer_init(&BufferInitDescriptor {
             label: Some("model_params"),

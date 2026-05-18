@@ -114,6 +114,7 @@ pub(crate) fn tiny_relu_model() -> PredictiveCodingModel {
         convergence_threshold: 0.0,
         convergence_steps: 1,
         activation_function: ActivationFunction::Relu,
+        weight_clip: 0.0,
     })
 }
 

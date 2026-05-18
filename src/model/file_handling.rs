@@ -99,6 +99,7 @@ mod tests {
             convergence_threshold: 0.0,
             convergence_steps: 2,
             activation_function: ActivationFunction::Tanh,
+            weight_clip: 0.0,
         };
 
         assert_eq!(actual, expected);
@@ -149,6 +150,7 @@ mod tests {
             convergence_threshold: 0.0,
             convergence_steps: 2,
             activation_function: ActivationFunction::Relu,
+            weight_clip: 0.0,
         });
 
         model.set_input(array![1.0, 0.0, 0.5, 0.25]);

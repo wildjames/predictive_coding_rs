@@ -94,6 +94,7 @@ impl TrainingHandler for GpuBatchTrainHandler {
         let mut total_converge = std::time::Duration::ZERO;
         let mut total_accumulate = std::time::Duration::ZERO;
 
+        // TODO: This executes the batch models serially - this should be parallelised!
         for _ in 0..self.batch_size {
             let t = Instant::now();
             let (input, output) = self.data.get_random_input_and_output();

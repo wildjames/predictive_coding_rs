@@ -207,11 +207,16 @@ impl CpuModelRuntime {
         let mut weight_updates = Vec::with_capacity(num_layers.saturating_sub(1));
 
         for index in 0..num_layers.saturating_sub(1) {
-            weight_updates.push(Self::compute_weight_updates_for_layer(
+            let mut update = Self::compute_weight_updates_for_layer(
                 self.model.alpha,
                 &self.model.layers[index + 1],
                 &self.model.layers[index],
-            ));
+            );
+            if self.model.weight_clip > 0.0 {
+                let clip = self.model.weight_clip;
+                update.mapv_inplace(|x| x.clamp(-clip, clip));
+            }
+            weight_updates.push(update);
         }
 
         weight_updates
@@ -427,6 +432,7 @@ mod tests {
             convergence_threshold: 0.0,
             convergence_steps: 1,
             activation_function: ActivationFunction::Relu,
+            weight_clip: 0.0,
         });
 
         runtime.model_mut().layers[0].pinned = true;
