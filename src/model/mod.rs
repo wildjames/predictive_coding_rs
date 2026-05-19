@@ -13,6 +13,8 @@ pub use cpu::CpuModelRuntime;
 #[cfg(feature = "gpu")]
 pub mod gpu;
 #[cfg(feature = "gpu")]
+pub use gpu::GpuBatchRuntime;
+#[cfg(feature = "gpu")]
 pub use gpu::GpuModelRuntime;
 
 mod model_structure;

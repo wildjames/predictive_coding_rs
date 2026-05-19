@@ -23,7 +23,7 @@ mod test_utils;
 struct BenchArgs {
     /// The model configuration to benchmark.
     // #[arg(default_value_t = String::from("benchmark_data/benchmark_minibatch_config.json"))]
-    #[arg(default_value_t = String::from("benchmark_data/benchmark_gpu_singlethread_config.json"))]
+    #[arg(default_value_t = String::from("benchmark_data/benchmark_gpu_minibatch_config.json"))]
     config: String,
 
     /// Optional artifact output prefix. Defaults to `benchmark_data/<timestamp>/benchmark`.

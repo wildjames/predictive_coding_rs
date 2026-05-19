@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// Predictive-coding compute shaders — timestep & weight-update kernels
+// Predictive-coding compute shaders - timestep & weight-update kernels
 //
 // Buffer layout (matches layout.rs PcBindGroupLayouts::timestep_weight):
 //   @group(0) @binding(0)  params               : ModelParams (uniform) {alpha, gamma, conv_thresh, conv_steps, weight_clip}

@@ -1,9 +1,9 @@
 // ---------------------------------------------------------------------------
-// Predictive-coding compute shaders — predict & error kernels
+// Predictive-coding compute shaders - predict & error kernels
 //
 // Buffer layout (matches layout.rs PcBindGroupLayouts::predict_error):
 //   @group(0) @binding(0)  upper_values     : array<f32>  (read)
-//   @group(0) @binding(1)  upper_weights    : array<f32>  (read)   row-major (lower_size × upper_size)
+//   @group(0) @binding(1)  upper_weights    : array<f32>  (read)   row-major (lower_size * upper_size)
 //   @group(0) @binding(2)  upper_meta       : array<u32>  (read)   [pinned, activation_fn, size, weight_rows, weight_cols, is_top_level, error_sum_offset]
 //   @group(0) @binding(3)  lower_values     : array<f32>  (read)
 //   @group(0) @binding(4)  lower_preds      : array<f32>  (rw)

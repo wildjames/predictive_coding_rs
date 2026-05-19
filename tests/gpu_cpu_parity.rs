@@ -9,8 +9,9 @@
 use std::sync::{Arc, OnceLock};
 
 use predictive_coding::model::{
-    CpuModelRuntime, GpuModelRuntime, ModelSnapshot, PredictiveCodingModel,
-    PredictiveCodingModelConfig, TrainableModelRuntime, gpu::GpuContext, maths::ActivationFunction,
+    CpuModelRuntime, GpuBatchRuntime, GpuModelRuntime, ModelRuntime, ModelSnapshot,
+    PredictiveCodingModel, PredictiveCodingModelConfig, TrainableModelRuntime, gpu::GpuContext,
+    maths::ActivationFunction,
 };
 
 /// Absolute tolerance for floating-point comparisons.
@@ -317,4 +318,145 @@ fn full_training_step_parity() {
         assert_vecs_close(&format!("{label} values"), &cl.values, &gl.values);
         assert_vecs_close(&format!("{label} weights"), &cl.weights, &gl.weights);
     }
+}
+
+// -----------------------------------------------------------------------
+// Batch-parallel runtime tests
+// -----------------------------------------------------------------------
+
+/// Verify that the batch runtime with batch_size=1 produces the same weight
+/// updates as the serial GPU runtime after one full train step.
+///
+/// Note: slightly higher tolerance because the serial runtime checks convergence
+/// per-iteration, while the batch runtime runs fixed steps. This leads to minor
+/// drift in the converged latents.
+#[test]
+fn batch_runtime_single_sample_matches_serial() {
+    // Use a snapshot with very tight convergence so both paths run all steps.
+    let config = PredictiveCodingModelConfig {
+        layer_sizes: vec![4, 8, 5, 3],
+        alpha: 0.01,
+        gamma: 0.05,
+        convergence_threshold: 0.0, // Force both to run all steps
+        convergence_steps: 50,
+        activation_function: ActivationFunction::Sigmoid,
+        weight_clip: 0.0,
+    };
+    let snapshot = PredictiveCodingModel::new(&config).to_snapshot();
+
+    // Serial GPU runtime
+    let mut serial = GpuModelRuntime::from_snapshot_with_context(&snapshot, shared_gpu_context())
+        .expect("serial gpu runtime");
+
+    // Batch runtime with batch_size=1
+    let batch = GpuBatchRuntime::from_snapshot_with_context(&snapshot, shared_gpu_context(), 1)
+        .expect("batch gpu runtime");
+
+    let input_size = snapshot.config.layer_sizes[0];
+    let output_size = *snapshot.config.layer_sizes.last().unwrap();
+
+    let input: Vec<f32> = (0..input_size)
+        .map(|i| (i as f32 + 1.0) / input_size as f32)
+        .collect();
+    let output: Vec<f32> = (0..output_size)
+        .map(|i| (i as f32) / output_size as f32)
+        .collect();
+
+    // --- Serial path ---
+    serial.set_input(&input).unwrap();
+    serial.set_output(&output).unwrap();
+
+    // Set alpha / batch_size
+    serial.set_params_alpha(snapshot.config.alpha / 1.0);
+    serial.zero_weight_accumulators();
+
+    // We can't reinitialise latents deterministically across runtimes, so
+    // instead skip reinit and just converge from current state.
+    serial.converge_values().unwrap();
+    serial.accumulate_weight_deltas_on_device();
+    serial.apply_accumulated_weight_deltas();
+
+    let serial_snap = serial.snapshot().unwrap();
+
+    // --- Batch path ---
+    batch.set_params_alpha(snapshot.config.alpha / 1.0);
+    batch.zero_weight_accumulators();
+
+    // Upload same data (skip latent reinit so both start from same zero latents)
+    batch.set_batch_data(&[(input, output)]).unwrap();
+    batch.converge_all().unwrap();
+    batch.accumulate_all_weight_deltas();
+    batch.apply_accumulated_weight_deltas();
+
+    let batch_snap = batch.snapshot().unwrap();
+
+    // Compare weights - they should be very close since both processed the same
+    // single sample from the same initial state (zero latents). Slightly higher
+    // tolerance because the batch runtime submits all iterations in one encoder
+    // per step vs separate submits in the serial path, causing minor FP drift.
+    const BATCH_TOL: f32 = 5e-4;
+    for (i, (sl, bl)) in serial_snap
+        .layers
+        .iter()
+        .zip(batch_snap.layers.iter())
+        .enumerate()
+    {
+        assert_eq!(sl.weights.len(), bl.weights.len());
+        for (j, (s, b)) in sl.weights.iter().zip(bl.weights.iter()).enumerate() {
+            assert!(
+                (s - b).abs() < BATCH_TOL,
+                "batch_vs_serial layer {i} weights[{j}]: serial={s} batch={b} diff={}",
+                (s - b).abs()
+            );
+        }
+    }
+}
+
+/// Verify the batch runtime runs without panicking for batch_size > 1
+/// and produces a valid snapshot.
+#[test]
+fn batch_runtime_multi_sample_smoke() {
+    let snapshot = make_test_snapshot(&[4, 6, 3], ActivationFunction::Relu);
+    let batch_size = 4u32;
+
+    let batch =
+        GpuBatchRuntime::from_snapshot_with_context(&snapshot, shared_gpu_context(), batch_size)
+            .expect("batch gpu runtime");
+
+    let input_size = snapshot.config.layer_sizes[0];
+    let output_size = *snapshot.config.layer_sizes.last().unwrap();
+
+    // Generate deterministic samples
+    let samples: Vec<(Vec<f32>, Vec<f32>)> = (0..batch_size)
+        .map(|s| {
+            let input: Vec<f32> = (0..input_size)
+                .map(|i| ((i + s as usize) as f32 + 1.0) / input_size as f32)
+                .collect();
+            let output: Vec<f32> = (0..output_size)
+                .map(|i| ((i + s as usize) as f32) / output_size as f32)
+                .collect();
+            (input, output)
+        })
+        .collect();
+
+    batch.set_params_alpha(snapshot.config.alpha / batch_size as f32);
+    batch.zero_weight_accumulators();
+    batch.set_batch_data(&samples).unwrap();
+    batch.reinitialise_all_latents();
+    batch.converge_all().unwrap();
+    batch.accumulate_all_weight_deltas();
+    batch.apply_accumulated_weight_deltas();
+
+    // Should produce a valid snapshot without panicking
+    let result_snap = batch.snapshot().unwrap();
+    assert_eq!(result_snap.layers.len(), snapshot.layers.len());
+
+    // Weights should have changed from the initial values
+    let initial_weights = &snapshot.layers[1].weights;
+    let final_weights = &result_snap.layers[1].weights;
+    let any_changed = initial_weights
+        .iter()
+        .zip(final_weights.iter())
+        .any(|(a, b)| (a - b).abs() > 1e-10);
+    assert!(any_changed, "weights should change after a training step");
 }
