@@ -114,6 +114,17 @@ impl GpuModelRuntime {
         rt.block_on(Self::from_snapshot_with_context_async(snapshot, ctx))
     }
 
+    /// Block until all submitted GPU work has completed. Returns the wall-clock
+    /// duration the CPU spent idle waiting for the GPU.
+    pub fn poll_gpu(&self) -> std::time::Duration {
+        let t = std::time::Instant::now();
+        self.ctx
+            .device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .unwrap();
+        t.elapsed()
+    }
+
     /// Build predict/error bind groups - one per adjacent layer pair.
     fn build_pe_bind_groups(
         ctx: &Arc<GpuContext>,

@@ -10,6 +10,8 @@ pub struct GpuContext {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pub adapter_info: wgpu::AdapterInfo,
+    /// The adapter's hardware limits (as opposed to the device's requested limits).
+    pub adapter_limits: wgpu::Limits,
 }
 
 impl GpuContext {
@@ -33,6 +35,7 @@ impl GpuContext {
             })?;
 
         let adapter_info = adapter.get_info();
+        let adapter_limits = adapter.limits();
 
         let (device, queue): (wgpu::Device, wgpu::Queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
@@ -55,6 +58,7 @@ impl GpuContext {
             device,
             queue,
             adapter_info,
+            adapter_limits,
         }))
     }
 

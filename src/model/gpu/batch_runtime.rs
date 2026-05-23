@@ -625,6 +625,17 @@ impl GpuBatchRuntime {
             .write_buffer(&self.buffers.params, 0, bytemuck::cast_slice(&[alpha]));
     }
 
+    /// Block until all submitted GPU work has completed. Returns the wall-clock
+    /// duration the CPU spent idle waiting for the GPU.
+    pub fn poll_gpu(&self) -> std::time::Duration {
+        let t = std::time::Instant::now();
+        self.ctx
+            .device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .unwrap();
+        t.elapsed()
+    }
+
     /// Human-readable description of the GPU adapter.
     pub fn gpu_description(&self) -> String {
         self.ctx.adapter_description()

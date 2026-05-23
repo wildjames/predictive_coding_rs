@@ -20,3 +20,6 @@ bench: build
 
 coverage: build
 	cargo llvm-cov
+
+estimate-batch-size: build
+	cargo run --release --bin batch-size-advisor --all-features data/model_config.json

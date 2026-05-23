@@ -16,6 +16,8 @@ pub mod gpu;
 pub use gpu::GpuBatchRuntime;
 #[cfg(feature = "gpu")]
 pub use gpu::GpuModelRuntime;
+#[cfg(feature = "gpu")]
+pub use gpu::{GpuMemoryEstimate, estimate_batch_size};
 
 mod model_structure;
 pub use model_structure::{Layer, PredictiveCodingModel, PredictiveCodingModelConfig};

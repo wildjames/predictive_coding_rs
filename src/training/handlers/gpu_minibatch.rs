@@ -54,11 +54,14 @@ impl_handler_delegation!(GpuBatchTrainHandler, gpu_runtime, {
             self.batch_runtime.gpu_description()
         );
         info!("Mini batch params: batch size = {}", self.batch_size);
+        info!("Tip: Watch the 'cpu_idle_waiting_gpu' phase in step profiles. \
+               Low values indicate the GPU is bottlenecked and a larger batch size may help.");
         Ok(())
     }
 
     fn profiled_train_step(&mut self, _step: u32) -> Result<StepProfile> {
         let mut profile = StepProfile::new();
+        let mut total_cpu_idle = std::time::Duration::ZERO;
 
         let t = Instant::now();
         let original_alpha = self.batch_runtime.config().alpha;
@@ -92,21 +95,48 @@ impl_handler_delegation!(GpuBatchTrainHandler, gpu_runtime, {
         // converge all slots in parallel
         let t = Instant::now();
         self.batch_runtime.converge_all()?;
-        profile.record("converge_values", t.elapsed());
+        let encode_elapsed = t.elapsed();
+        let gpu_idle = self.batch_runtime.poll_gpu();
+        total_cpu_idle += gpu_idle;
+        profile.record("converge_values", encode_elapsed + gpu_idle);
 
         // Update model
         let t = Instant::now();
         self.batch_runtime.accumulate_all_weight_deltas();
-        profile.record("accumulate_deltas", t.elapsed());
+        let encode_elapsed = t.elapsed();
+        let gpu_idle = self.batch_runtime.poll_gpu();
+        total_cpu_idle += gpu_idle;
+        profile.record("accumulate_deltas", encode_elapsed + gpu_idle);
 
         let t = Instant::now();
         self.batch_runtime.apply_accumulated_weight_deltas();
-        profile.record("apply_deltas", t.elapsed());
+        let encode_elapsed = t.elapsed();
+        let gpu_idle = self.batch_runtime.poll_gpu();
+        total_cpu_idle += gpu_idle;
+        profile.record("apply_deltas", encode_elapsed + gpu_idle);
 
         // Restore the original alpha
         let t = Instant::now();
         self.batch_runtime.set_params_alpha(original_alpha);
         profile.record("restore_alpha", t.elapsed());
+
+        // Record the total CPU idle time as a separate phase for visibility
+        profile.record("cpu_idle_waiting_gpu", total_cpu_idle);
+
+        // Log GPU utilization: fraction of step time where the GPU was active.
+        // cpu_idle_waiting_gpu ≈ GPU execution time (CPU blocked on GPU).
+        // The remainder is CPU-only work during which the GPU is idle.
+        let total_step = profile.total();
+        if total_step.as_nanos() > 0 {
+            let gpu_util_pct =
+                (total_cpu_idle.as_secs_f64() / total_step.as_secs_f64()) * 100.0;
+            debug!(
+                "GPU utilization: {:.1}% (GPU busy {:.1}ms / step {:.1}ms)",
+                gpu_util_pct,
+                total_cpu_idle.as_secs_f64() * 1000.0,
+                total_step.as_secs_f64() * 1000.0,
+            );
+        }
 
         Ok(profile)
     }
