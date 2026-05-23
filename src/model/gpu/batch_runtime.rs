@@ -349,6 +349,14 @@ impl GpuBatchRuntime {
         let first_size = self.buffers.layers[0].size;
         let last_size = self.buffers.layers[n - 1].size;
 
+        if !samples.len() == self.batch_size as usize {
+            return Err(PredictiveCodingError::validation(format!(
+                "expected {} samples, got {}",
+                self.batch_size,
+                samples.len()
+            )));
+        }
+
         for (slot, (input, output)) in samples.iter().enumerate() {
             if input.len() != first_size {
                 return Err(PredictiveCodingError::validation(format!(
@@ -415,9 +423,10 @@ impl GpuBatchRuntime {
 
     /// Run the convergence loop for all slots simultaneously (fixed-step, no readback).
     ///
-    /// All iterations * all phases (predict -> error -> timestep) * all slots are
-    /// encoded into a single command encoder and submitted once. This minimises
-    /// driver overhead from repeated `queue.submit()` calls.
+    /// Each iteration uses one compute pass per phase (predict, errors, gain_errors,
+    /// timestep). Dispatches within a phase target independent per-slot buffers, so
+    /// no intra-pass barriers are needed. The implicit barrier between passes
+    /// synchronises the phases.
     pub fn converge_all(&self) -> Result<u32> {
         let steps = self.config.convergence_steps;
         let n = self.buffers.layers.len();
@@ -430,68 +439,69 @@ impl GpuBatchRuntime {
             });
 
         for _ in 0..steps {
-            // --- Predictions (top-down) for all slots ---
-            for slot in 0..self.batch_size as usize {
-                for pair_idx in (0..self.pe_bind_groups[slot].len()).rev() {
-                    let lower_size = self.buffers.layers[pair_idx].size as u32;
-                    let workgroups = lower_size.div_ceil(64);
-
-                    let mut pass = encoder.begin_compute_pass(&Default::default());
-                    pass.set_pipeline(&self.pipelines.predict);
-                    pass.set_bind_group(0, &self.pe_bind_groups[slot][pair_idx], &[]);
-                    pass.dispatch_workgroups(workgroups, 1, 1);
+            // --- Predictions (top-down) ---
+            {
+                let mut pass = encoder.begin_compute_pass(&Default::default());
+                pass.set_pipeline(&self.pipelines.predict);
+                for slot in 0..self.batch_size as usize {
+                    for pair_idx in (0..self.pe_bind_groups[slot].len()).rev() {
+                        let lower_size = self.buffers.layers[pair_idx].size as u32;
+                        let workgroups = lower_size.div_ceil(64);
+                        pass.set_bind_group(0, &self.pe_bind_groups[slot][pair_idx], &[]);
+                        pass.dispatch_workgroups(workgroups, 1, 1);
+                    }
                 }
             }
 
-            // --- Errors for all slots ---
-            for slot in 0..self.batch_size as usize {
-                for (i, bg) in self.pe_bind_groups[slot].iter().enumerate() {
-                    let lower_size = self.buffers.layers[i].size as u32;
-                    let workgroups = lower_size.div_ceil(64);
-
-                    let mut pass = encoder.begin_compute_pass(&Default::default());
-                    pass.set_pipeline(&self.pipelines.errors);
-                    pass.set_bind_group(0, bg, &[]);
-                    pass.dispatch_workgroups(workgroups, 1, 1);
-                }
-
-                // Top layer
-                let top_idx = n - 1;
-                let top_size = self.buffers.layers[top_idx].size as u32;
-                let workgroups = top_size.div_ceil(64);
-
+            // --- Errors ---
+            {
                 let mut pass = encoder.begin_compute_pass(&Default::default());
                 pass.set_pipeline(&self.pipelines.errors);
-                pass.set_bind_group(0, &self.pe_top_bind_groups[slot], &[]);
-                pass.dispatch_workgroups(workgroups, 1, 1);
-            }
-
-            // --- Timestep (gain_errors + values_timestep) for all slots ---
-            for slot in 0..self.batch_size as usize {
-                for i in 0..n {
-                    let lb = &self.buffers.layers[i];
-                    let total = lb.weight_rows as u32;
-                    if total == 0 {
-                        continue;
+                for slot in 0..self.batch_size as usize {
+                    for (i, bg) in self.pe_bind_groups[slot].iter().enumerate() {
+                        let lower_size = self.buffers.layers[i].size as u32;
+                        let workgroups = lower_size.div_ceil(64);
+                        pass.set_bind_group(0, bg, &[]);
+                        pass.dispatch_workgroups(workgroups, 1, 1);
                     }
-                    let workgroups = total.div_ceil(64);
-
-                    let mut pass = encoder.begin_compute_pass(&Default::default());
-                    pass.set_pipeline(&self.pipelines.compute_gain_errors);
-                    pass.set_bind_group(0, &self.tw_bind_groups[slot][i], &[]);
+                    // Top layer
+                    let top_size = self.buffers.layers[n - 1].size as u32;
+                    let workgroups = top_size.div_ceil(64);
+                    pass.set_bind_group(0, &self.pe_top_bind_groups[slot], &[]);
                     pass.dispatch_workgroups(workgroups, 1, 1);
                 }
             }
-            for slot in 0..self.batch_size as usize {
-                for i in 0..n {
-                    let lb = &self.buffers.layers[i];
-                    let total = lb.size as u32;
-                    let workgroups = total.div_ceil(64);
 
-                    let mut pass = encoder.begin_compute_pass(&Default::default());
-                    pass.set_pipeline(&self.pipelines.timestep);
-                    pass.set_bind_group(0, &self.tw_bind_groups[slot][i], &[]);
-                    pass.dispatch_workgroups(workgroups, 1, 1);
+            // --- Gain errors ---
+            {
+                let mut pass = encoder.begin_compute_pass(&Default::default());
+                pass.set_pipeline(&self.pipelines.compute_gain_errors);
+                for slot in 0..self.batch_size as usize {
+                    for i in 0..n {
+                        let lb = &self.buffers.layers[i];
+                        let total = lb.weight_rows as u32;
+                        if total == 0 {
+                            continue;
+                        }
+                        let workgroups = total.div_ceil(64);
+                        pass.set_bind_group(0, &self.tw_bind_groups[slot][i], &[]);
+                        pass.dispatch_workgroups(workgroups, 1, 1);
+                    }
+                }
+            }
+
+            // --- Timestep (value updates) ---
+            {
+                let mut pass = encoder.begin_compute_pass(&Default::default());
+                pass.set_pipeline(&self.pipelines.timestep);
+                for slot in 0..self.batch_size as usize {
+                    for i in 0..n {
+                        let lb = &self.buffers.layers[i];
+                        let total = lb.size as u32;
+                        let workgroups = total.div_ceil(64);
+                        pass.set_bind_group(0, &self.tw_bind_groups[slot][i], &[]);
+                        pass.dispatch_workgroups(workgroups, 1, 1);
+                    }
                 }
             }
         }

@@ -12,8 +12,8 @@ test: build
 clean:
 	cargo clean
 
-train: build
-	cargo run --release --bin train --all-features
+train-gpu: build
+	cargo run --release --bin train --all-features data/training_gpu_batch_config.json
 
 bench: build
 	cargo run --release --bin bench --all-features
