@@ -13,9 +13,7 @@ pub use cpu::CpuModelRuntime;
 #[cfg(feature = "gpu")]
 pub mod gpu;
 #[cfg(feature = "gpu")]
-pub use gpu::GpuBatchRuntime;
-#[cfg(feature = "gpu")]
-pub use gpu::GpuModelRuntime;
+pub use gpu::GpuRuntime;
 #[cfg(feature = "gpu")]
 pub use gpu::{GpuMemoryEstimate, estimate_batch_size};
 

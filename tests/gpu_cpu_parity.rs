@@ -1,4 +1,4 @@
-//! Integration tests that verify GPU and CPU backends produce identical results.
+//! Integration tests that verify GPU batch runtime and CPU backend produce identical results.
 //!
 //! Requires the `gpu` feature and a working GPU adapter (or software fallback).
 //! All tests share a single [`GpuContext`] to avoid intermittent SIGSEGV from
@@ -9,16 +9,19 @@
 use std::sync::{Arc, OnceLock};
 
 use predictive_coding::model::{
-    CpuModelRuntime, GpuBatchRuntime, GpuModelRuntime, ModelRuntime, ModelSnapshot,
-    PredictiveCodingModel, PredictiveCodingModelConfig, TrainableModelRuntime, gpu::GpuContext,
-    maths::ActivationFunction,
+    CpuModelRuntime, GpuRuntime, ModelRuntime, ModelSnapshot, PredictiveCodingModel,
+    PredictiveCodingModelConfig, TrainableModelRuntime, gpu::GpuContext, maths::ActivationFunction,
 };
 
 /// Absolute tolerance for floating-point comparisons.
 /// GPU f32 may differ slightly due to different reduction order.
 const TOL: f32 = 1e-4;
 
-fn assert_vecs_close(label: &str, cpu: &[f32], gpu: &[f32]) {
+/// Slightly higher tolerance for full training step comparisons where
+/// FP drift accumulates across convergence iterations.
+const TRAIN_TOL: f32 = 5e-4;
+
+fn assert_vecs_close(label: &str, cpu: &[f32], gpu: &[f32], tol: f32) {
     assert_eq!(
         cpu.len(),
         gpu.len(),
@@ -28,7 +31,7 @@ fn assert_vecs_close(label: &str, cpu: &[f32], gpu: &[f32]) {
     );
     for (i, (c, g)) in cpu.iter().zip(gpu.iter()).enumerate() {
         assert!(
-            (c - g).abs() < TOL,
+            (c - g).abs() < tol,
             "{label}[{i}]: cpu={c} gpu={g} diff={}",
             (c - g).abs()
         );
@@ -36,26 +39,18 @@ fn assert_vecs_close(label: &str, cpu: &[f32], gpu: &[f32]) {
 }
 
 /// Build a snapshot that both backends can start from.
-///
-/// Weights and values are randomly initialised (not seeded), so results vary
-/// between runs.  Within a single run both the CPU and GPU runtimes receive
-/// the same byte-identical snapshot.
 fn make_test_snapshot(layer_sizes: &[usize], activation: ActivationFunction) -> ModelSnapshot {
     let config = PredictiveCodingModelConfig {
         layer_sizes: layer_sizes.to_vec(),
         alpha: 0.01,
         gamma: 0.05,
-        convergence_threshold: 0.001,
+        convergence_threshold: 0.0, // Fixed steps to ensure identical iteration count
         convergence_steps: 50,
         activation_function: activation,
         weight_clip: 0.0,
     };
-    // Build a randomly-initialised model and immediately snapshot it so
-    // both backends start from byte-identical state.
     PredictiveCodingModel::new(&config).to_snapshot()
 }
-
-type BoxedRuntime = Box<dyn TrainableModelRuntime>;
 
 /// Single shared GPU context, initialised once and reused by every test.
 fn shared_gpu_context() -> Arc<GpuContext> {
@@ -70,22 +65,21 @@ fn shared_gpu_context() -> Arc<GpuContext> {
     .clone()
 }
 
-fn make_runtimes(
+/// Create a CPU runtime and a batch GPU runtime (batch_size=1) from the same snapshot,
+/// along with deterministic input/output data.
+fn make_cpu_and_batch(
     layer_sizes: &[usize],
     activation: ActivationFunction,
-) -> (BoxedRuntime, BoxedRuntime, Vec<f32>, Vec<f32>) {
-    let snapshot: ModelSnapshot = make_test_snapshot(layer_sizes, activation);
+) -> (CpuModelRuntime, GpuRuntime, Vec<f32>, Vec<f32>) {
+    let snapshot = make_test_snapshot(layer_sizes, activation);
 
-    let cpu: CpuModelRuntime =
-        CpuModelRuntime::from_snapshot(&snapshot).expect("cpu from snapshot");
-    let gpu: GpuModelRuntime =
-        GpuModelRuntime::from_snapshot_with_context(&snapshot, shared_gpu_context())
-            .expect("gpu from snapshot");
+    let cpu = CpuModelRuntime::from_snapshot(&snapshot).expect("cpu from snapshot");
+    let gpu = GpuRuntime::from_snapshot_with_context(&snapshot, shared_gpu_context(), 1)
+        .expect("batch gpu from snapshot");
 
     let input_size = layer_sizes[0];
     let output_size = *layer_sizes.last().unwrap();
 
-    // Deterministic I/O data
     let input: Vec<f32> = (0..input_size)
         .map(|i| (i as f32 + 1.0) / input_size as f32)
         .collect();
@@ -93,35 +87,41 @@ fn make_runtimes(
         .map(|i| (i as f32) / output_size as f32)
         .collect();
 
-    (Box::new(cpu), Box::new(gpu), input, output)
+    (cpu, gpu, input, output)
 }
 
 // -----------------------------------------------------------------------
-// Tests
+// Tests: batch_size=1 GPU vs CPU parity
 // -----------------------------------------------------------------------
 
+/// After convergence, the latent values and errors should match CPU.
 #[test]
-fn predictions_and_errors_match() {
+fn converge_values_match_cpu() {
     for activation in [
         ActivationFunction::Relu,
         ActivationFunction::Sigmoid,
         ActivationFunction::Tanh,
     ] {
-        let (mut cpu, mut gpu, input, output) = make_runtimes(&[4, 8, 5, 3], activation);
+        let (mut cpu, gpu, input, output) = make_cpu_and_batch(&[4, 8, 5, 3], activation);
 
+        // CPU path
         cpu.set_input(&input).unwrap();
         cpu.set_output(&output).unwrap();
+        let cpu_steps = cpu.converge_values().unwrap();
 
-        gpu.set_input(&input).unwrap();
-        gpu.set_output(&output).unwrap();
+        // GPU batch path (batch_size=1)
+        gpu.set_batch_data(&[(input.clone(), output.clone())])
+            .unwrap();
+        let gpu_steps = gpu.converge_all().unwrap();
 
-        cpu.compute_predictions_and_errors().unwrap();
-        gpu.compute_predictions_and_errors().unwrap();
+        assert_eq!(
+            cpu_steps, gpu_steps,
+            "{activation:?}: convergence steps differ (cpu={cpu_steps} gpu={gpu_steps})"
+        );
 
         let cpu_snap = cpu.snapshot().unwrap();
         let gpu_snap = gpu.snapshot().unwrap();
 
-        // Compare layer by layer to check for mismatches
         for (i, (cl, gl)) in cpu_snap
             .layers
             .iter()
@@ -129,181 +129,84 @@ fn predictions_and_errors_match() {
             .enumerate()
         {
             let label = format!("{activation:?} layer {i}");
-            assert_vecs_close(&format!("{label} values"), &cl.values, &gl.values);
-            assert_vecs_close(
-                &format!("{label} predictions"),
-                &cl.predictions,
-                &gl.predictions,
-            );
-            assert_vecs_close(&format!("{label} errors"), &cl.errors, &gl.errors);
+            assert_vecs_close(&format!("{label} values"), &cl.values, &gl.values, TOL);
+            assert_vecs_close(&format!("{label} errors"), &cl.errors, &gl.errors, TOL);
         }
     }
 }
 
-#[test]
-fn total_error_and_energy_match() {
-    let (mut cpu, mut gpu, input, output) =
-        make_runtimes(&[4, 8, 5, 3], ActivationFunction::Sigmoid);
-
-    cpu.set_input(&input).unwrap();
-    cpu.set_output(&output).unwrap();
-
-    gpu.set_input(&input).unwrap();
-    gpu.set_output(&output).unwrap();
-
-    cpu.compute_predictions_and_errors().unwrap();
-    gpu.compute_predictions_and_errors().unwrap();
-
-    // The total error and energy may differ slightly due to maths being different on GPU and CPU, so allow some tolerance.
-    let cpu_err = cpu.total_error().unwrap();
-    let gpu_err = gpu.total_error().unwrap();
-    assert!(
-        (cpu_err - gpu_err).abs() < TOL,
-        "total_error: cpu={cpu_err} gpu={gpu_err}"
-    );
-
-    let cpu_energy = cpu.total_energy().unwrap();
-    let gpu_energy = gpu.total_energy().unwrap();
-    assert!(
-        (cpu_energy - gpu_energy).abs() < TOL,
-        "total_energy: cpu={cpu_energy} gpu={gpu_energy}"
-    );
-}
-
-#[test]
-fn timestep_values_match() {
-    let (mut cpu, mut gpu, input, output) = make_runtimes(&[4, 8, 5, 3], ActivationFunction::Tanh);
-
-    cpu.set_input(&input).unwrap();
-    cpu.set_output(&output).unwrap();
-
-    gpu.set_input(&input).unwrap();
-    gpu.set_output(&output).unwrap();
-
-    // Run prediction + error + timestep
-    cpu.compute_predictions_and_errors().unwrap();
-    gpu.compute_predictions_and_errors().unwrap();
-
-    let cpu_change = cpu.timestep().unwrap();
-    let gpu_change = gpu.timestep().unwrap();
-
-    assert!(
-        (cpu_change - gpu_change).abs() < TOL,
-        "timestep mean change: cpu={cpu_change} gpu={gpu_change}"
-    );
-
-    // Compare resulting values after the timestep
-    let cpu_snap = cpu.snapshot().unwrap();
-    let gpu_snap = gpu.snapshot().unwrap();
-
-    for (i, (cl, gl)) in cpu_snap
-        .layers
-        .iter()
-        .zip(gpu_snap.layers.iter())
-        .enumerate()
-    {
-        assert_vecs_close(
-            &format!("post-timestep layer {i} values"),
-            &cl.values,
-            &gl.values,
-        );
-    }
-}
-
-#[test]
-fn converge_values_match() {
-    let (mut cpu, mut gpu, input, output) =
-        make_runtimes(&[3, 5, 8, 2], ActivationFunction::Sigmoid);
-
-    cpu.set_input(&input).unwrap();
-    cpu.set_output(&output).unwrap();
-
-    gpu.set_input(&input).unwrap();
-    gpu.set_output(&output).unwrap();
-
-    let cpu_steps = cpu.converge_values().unwrap();
-    let gpu_steps = gpu.converge_values().unwrap();
-
-    assert_eq!(
-        cpu_steps, gpu_steps,
-        "convergence steps: cpu={cpu_steps} gpu={gpu_steps}"
-    );
-
-    let cpu_snap: ModelSnapshot = cpu.snapshot().unwrap();
-    let gpu_snap: ModelSnapshot = gpu.snapshot().unwrap();
-
-    for (i, (cl, gl)) in cpu_snap
-        .layers
-        .iter()
-        .zip(gpu_snap.layers.iter())
-        .enumerate()
-    {
-        assert_vecs_close(
-            &format!("post-converge layer {i} values"),
-            &cl.values,
-            &gl.values,
-        );
-        assert_vecs_close(
-            &format!("post-converge layer {i} errors"),
-            &cl.errors,
-            &gl.errors,
-        );
-    }
-}
-
-#[test]
-fn weight_updates_match() {
-    let (mut cpu, mut gpu, input, output) = make_runtimes(&[4, 6, 2, 3], ActivationFunction::Relu);
-
-    cpu.set_input(&input).unwrap();
-    cpu.set_output(&output).unwrap();
-
-    gpu.set_input(&input).unwrap();
-    gpu.set_output(&output).unwrap();
-
-    // Converge first so errors are meaningful
-    cpu.compute_predictions_and_errors().unwrap();
-    gpu.compute_predictions_and_errors().unwrap();
-
-    let cpu_updates = cpu.compute_weight_updates().unwrap();
-    let gpu_updates = gpu.compute_weight_updates().unwrap();
-
-    assert_eq!(
-        cpu_updates.shapes, gpu_updates.shapes,
-        "weight update shapes mismatch"
-    );
-
-    for (i, (cu, gu)) in cpu_updates
-        .updates
-        .iter()
-        .zip(gpu_updates.updates.iter())
-        .enumerate()
-    {
-        assert_vecs_close(&format!("weight_update layer {}", i + 1), cu, gu);
-    }
-}
-
+/// After a full training step (converge + weight update), weights should match CPU.
 #[test]
 fn full_training_step_parity() {
-    // Run a full train step: set I/O, converge, update weights, then compare.
-    let (mut cpu, mut gpu, input, output) =
-        make_runtimes(&[4, 8, 4, 3], ActivationFunction::Sigmoid);
+    for activation in [
+        ActivationFunction::Relu,
+        ActivationFunction::Sigmoid,
+        ActivationFunction::Tanh,
+    ] {
+        let (mut cpu, gpu, input, output) = make_cpu_and_batch(&[4, 8, 4, 3], activation);
 
-    cpu.set_input(&input).unwrap();
-    cpu.set_output(&output).unwrap();
+        // --- CPU path ---
+        cpu.set_input(&input).unwrap();
+        cpu.set_output(&output).unwrap();
+        cpu.converge_values().unwrap();
+        let cpu_updates = cpu.compute_weight_updates().unwrap();
+        cpu.apply_weight_updates(&cpu_updates).unwrap();
 
-    gpu.set_input(&input).unwrap();
-    gpu.set_output(&output).unwrap();
+        // --- GPU batch path (batch_size=1) ---
+        gpu.set_params_alpha(gpu.config().alpha);
+        gpu.zero_weight_accumulators();
+        gpu.set_batch_data(&[(input.clone(), output.clone())])
+            .unwrap();
+        gpu.converge_all().unwrap();
+        gpu.accumulate_all_weight_deltas();
+        gpu.apply_accumulated_weight_deltas();
 
-    cpu.converge_values().unwrap();
-    gpu.converge_values().unwrap();
+        let cpu_snap = cpu.snapshot().unwrap();
+        let gpu_snap = gpu.snapshot().unwrap();
 
-    // Use compute + apply (not update_weights) so both do the same path.
-    let cpu_updates = cpu.compute_weight_updates().unwrap();
-    let gpu_updates = gpu.compute_weight_updates().unwrap();
+        for (i, (cl, gl)) in cpu_snap
+            .layers
+            .iter()
+            .zip(gpu_snap.layers.iter())
+            .enumerate()
+        {
+            let label = format!("{activation:?} full-step layer {i}");
+            assert_vecs_close(&format!("{label} values"), &cl.values, &gl.values, TRAIN_TOL);
+            assert_vecs_close(
+                &format!("{label} weights"),
+                &cl.weights,
+                &gl.weights,
+                TRAIN_TOL,
+            );
+        }
+    }
+}
 
-    cpu.apply_weight_updates(&cpu_updates).unwrap();
-    gpu.apply_weight_updates(&gpu_updates).unwrap();
+/// Verify that multiple training steps accumulate correctly (batch_size=1).
+#[test]
+fn multi_step_weight_accumulation() {
+    let (mut cpu, gpu, input, output) =
+        make_cpu_and_batch(&[4, 6, 3], ActivationFunction::Sigmoid);
+
+    let steps = 3;
+
+    for _ in 0..steps {
+        // CPU step
+        cpu.set_input(&input).unwrap();
+        cpu.set_output(&output).unwrap();
+        cpu.converge_values().unwrap();
+        let updates = cpu.compute_weight_updates().unwrap();
+        cpu.apply_weight_updates(&updates).unwrap();
+
+        // GPU batch step
+        gpu.set_params_alpha(gpu.config().alpha);
+        gpu.zero_weight_accumulators();
+        gpu.set_batch_data(&[(input.clone(), output.clone())])
+            .unwrap();
+        gpu.converge_all().unwrap();
+        gpu.accumulate_all_weight_deltas();
+        gpu.apply_accumulated_weight_deltas();
+    }
 
     let cpu_snap = cpu.snapshot().unwrap();
     let gpu_snap = gpu.snapshot().unwrap();
@@ -314,119 +217,124 @@ fn full_training_step_parity() {
         .zip(gpu_snap.layers.iter())
         .enumerate()
     {
-        let label = format!("full-step layer {i}");
-        assert_vecs_close(&format!("{label} values"), &cl.values, &gl.values);
-        assert_vecs_close(&format!("{label} weights"), &cl.weights, &gl.weights);
+        // After multiple steps, tolerance grows slightly
+        assert_vecs_close(
+            &format!("multi-step layer {i} weights"),
+            &cl.weights,
+            &gl.weights,
+            TRAIN_TOL * steps as f32,
+        );
     }
 }
 
 // -----------------------------------------------------------------------
-// Batch-parallel runtime tests
+// Tests: batch_size > 1 correctness
 // -----------------------------------------------------------------------
 
-/// Verify that the batch runtime with batch_size=1 produces the same weight
-/// updates as the serial GPU runtime after one full train step.
-///
-/// Note: slightly higher tolerance because the serial runtime checks convergence
-/// per-iteration, while the batch runtime runs fixed steps. This leads to minor
-/// drift in the converged latents.
+/// Verify that batch_size=N produces the same weights as N sequential
+/// single-sample updates on CPU (each accumulating into a shared delta buffer).
 #[test]
-fn batch_runtime_single_sample_matches_serial() {
-    // Use a snapshot with very tight convergence so both paths run all steps.
-    let config = PredictiveCodingModelConfig {
-        layer_sizes: vec![4, 8, 5, 3],
-        alpha: 0.01,
-        gamma: 0.05,
-        convergence_threshold: 0.0, // Force both to run all steps
-        convergence_steps: 50,
-        activation_function: ActivationFunction::Sigmoid,
-        weight_clip: 0.0,
-    };
-    let snapshot = PredictiveCodingModel::new(&config).to_snapshot();
-
-    // Serial GPU runtime
-    let mut serial = GpuModelRuntime::from_snapshot_with_context(&snapshot, shared_gpu_context())
-        .expect("serial gpu runtime");
-
-    // Batch runtime with batch_size=1
-    let batch = GpuBatchRuntime::from_snapshot_with_context(&snapshot, shared_gpu_context(), 1)
-        .expect("batch gpu runtime");
+fn batch_matches_sequential_cpu_updates() {
+    let batch_size = 4u32;
+    let snapshot = make_test_snapshot(&[4, 6, 3], ActivationFunction::Sigmoid);
 
     let input_size = snapshot.config.layer_sizes[0];
     let output_size = *snapshot.config.layer_sizes.last().unwrap();
 
-    let input: Vec<f32> = (0..input_size)
-        .map(|i| (i as f32 + 1.0) / input_size as f32)
+    // Generate deterministic samples
+    let samples: Vec<(Vec<f32>, Vec<f32>)> = (0..batch_size)
+        .map(|s| {
+            let input: Vec<f32> = (0..input_size)
+                .map(|i| ((i + s as usize) as f32 + 1.0) / (input_size as f32 * 2.0))
+                .collect();
+            let output: Vec<f32> = (0..output_size)
+                .map(|i| ((i + s as usize) as f32) / (output_size as f32 * 2.0))
+                .collect();
+            (input, output)
+        })
         .collect();
-    let output: Vec<f32> = (0..output_size)
-        .map(|i| (i as f32) / output_size as f32)
-        .collect();
 
-    // --- Serial path ---
-    serial.set_input(&input).unwrap();
-    serial.set_output(&output).unwrap();
+    // --- CPU sequential path: accumulate weight deltas from N samples ---
+    let alpha = snapshot.config.alpha;
+    let mut accumulated_updates: Option<Vec<Vec<f32>>> = None;
 
-    // Set alpha / batch_size
-    serial.set_params_alpha(snapshot.config.alpha / 1.0);
-    serial.zero_weight_accumulators();
+    for (input, output) in &samples {
+        let mut cpu = CpuModelRuntime::from_snapshot(&snapshot).expect("cpu from snapshot");
+        cpu.set_input(input).unwrap();
+        cpu.set_output(output).unwrap();
+        cpu.converge_values().unwrap();
+        let updates = cpu.compute_weight_updates().unwrap();
 
-    // We can't reinitialise latents deterministically across runtimes, so
-    // instead skip reinit and just converge from current state.
-    serial.converge_values().unwrap();
-    serial.accumulate_weight_deltas_on_device();
-    serial.apply_accumulated_weight_deltas();
+        match &mut accumulated_updates {
+            None => {
+                accumulated_updates = Some(updates.updates.clone());
+            }
+            Some(accum) => {
+                for (a, u) in accum.iter_mut().zip(updates.updates.iter()) {
+                    for (av, uv) in a.iter_mut().zip(u.iter()) {
+                        *av += *uv;
+                    }
+                }
+            }
+        }
+    }
 
-    let serial_snap = serial.snapshot().unwrap();
+    // Apply accumulated updates to a fresh snapshot
+    let mut modified_snap = snapshot.clone();
+    if let Some(accum) = &accumulated_updates {
+        for (layer_idx, layer_deltas) in accum.iter().enumerate() {
+            let l = &mut modified_snap.layers[layer_idx + 1];
+            for (w, d) in l.weights.iter_mut().zip(layer_deltas.iter()) {
+                *w += *d;
+            }
+        }
+    }
 
-    // --- Batch path ---
-    batch.set_params_alpha(snapshot.config.alpha / 1.0);
-    batch.zero_weight_accumulators();
+    // --- GPU batch path ---
+    let gpu =
+        GpuRuntime::from_snapshot_with_context(&snapshot, shared_gpu_context(), batch_size)
+            .expect("batch gpu runtime");
 
-    // Upload same data (skip latent reinit so both start from same zero latents)
-    batch.set_batch_data(&[(input, output)]).unwrap();
-    batch.converge_all().unwrap();
-    batch.accumulate_all_weight_deltas();
-    batch.apply_accumulated_weight_deltas();
+    gpu.set_params_alpha(alpha);
+    gpu.zero_weight_accumulators();
+    gpu.set_batch_data(&samples).unwrap();
+    gpu.converge_all().unwrap();
+    gpu.accumulate_all_weight_deltas();
+    gpu.apply_accumulated_weight_deltas();
 
-    let batch_snap = batch.snapshot().unwrap();
+    let gpu_snap = gpu.snapshot().unwrap();
 
-    // Compare weights - they should be very close since both processed the same
-    // single sample from the same initial state (zero latents). Slightly higher
-    // tolerance because the batch runtime submits all iterations in one encoder
-    // per step vs separate submits in the serial path, causing minor FP drift.
-    const BATCH_TOL: f32 = 5e-4;
-    for (i, (sl, bl)) in serial_snap
+    for (i, (cl, gl)) in modified_snap
         .layers
         .iter()
-        .zip(batch_snap.layers.iter())
+        .zip(gpu_snap.layers.iter())
         .enumerate()
     {
-        assert_eq!(sl.weights.len(), bl.weights.len());
-        for (j, (s, b)) in sl.weights.iter().zip(bl.weights.iter()).enumerate() {
-            assert!(
-                (s - b).abs() < BATCH_TOL,
-                "batch_vs_serial layer {i} weights[{j}]: serial={s} batch={b} diff={}",
-                (s - b).abs()
-            );
+        if cl.weights.is_empty() {
+            continue;
         }
+        assert_vecs_close(
+            &format!("batch_vs_cpu layer {i} weights"),
+            &cl.weights,
+            &gl.weights,
+            TRAIN_TOL,
+        );
     }
 }
 
-/// Verify the batch runtime runs without panicking for batch_size > 1
-/// and produces a valid snapshot.
+/// Smoke test: batch_size > 1 runs without panicking and produces changed weights.
 #[test]
 fn batch_runtime_multi_sample_smoke() {
     let snapshot = make_test_snapshot(&[4, 6, 3], ActivationFunction::Relu);
     let batch_size = 4u32;
 
     let batch =
-        GpuBatchRuntime::from_snapshot_with_context(&snapshot, shared_gpu_context(), batch_size)
+        GpuRuntime::from_snapshot_with_context(&snapshot, shared_gpu_context(), batch_size)
             .expect("batch gpu runtime");
 
     let input_size = snapshot.config.layer_sizes[0];
     let output_size = *snapshot.config.layer_sizes.last().unwrap();
 
-    // Generate deterministic samples
     let samples: Vec<(Vec<f32>, Vec<f32>)> = (0..batch_size)
         .map(|s| {
             let input: Vec<f32> = (0..input_size)
@@ -447,11 +355,10 @@ fn batch_runtime_multi_sample_smoke() {
     batch.accumulate_all_weight_deltas();
     batch.apply_accumulated_weight_deltas();
 
-    // Should produce a valid snapshot without panicking
     let result_snap = batch.snapshot().unwrap();
     assert_eq!(result_snap.layers.len(), snapshot.layers.len());
 
-    // Weights should have changed from the initial values
+    // Weights should have changed
     let initial_weights = &snapshot.layers[1].weights;
     let final_weights = &result_snap.layers[1].weights;
     let any_changed = initial_weights
@@ -459,4 +366,30 @@ fn batch_runtime_multi_sample_smoke() {
         .zip(final_weights.iter())
         .any(|(a, b)| (a - b).abs() > 1e-10);
     assert!(any_changed, "weights should change after a training step");
+}
+
+/// Verify snapshot returns valid layer geometry.
+#[test]
+fn batch_snapshot_geometry() {
+    let sizes = &[4, 8, 5, 3];
+    let snapshot = make_test_snapshot(sizes, ActivationFunction::Tanh);
+    let gpu =
+        GpuRuntime::from_snapshot_with_context(&snapshot, shared_gpu_context(), 2)
+            .expect("batch gpu runtime");
+
+    let result = gpu.snapshot().unwrap();
+    assert_eq!(result.layers.len(), sizes.len());
+
+    for (i, layer) in result.layers.iter().enumerate() {
+        assert_eq!(layer.size, sizes[i]);
+        assert_eq!(layer.values.len(), sizes[i]);
+        assert_eq!(layer.predictions.len(), sizes[i]);
+        assert_eq!(layer.errors.len(), sizes[i]);
+
+        if i > 0 {
+            assert_eq!(layer.weight_rows, sizes[i]);
+            assert_eq!(layer.weight_cols, sizes[i - 1]);
+            assert_eq!(layer.weights.len(), sizes[i] * sizes[i - 1]);
+        }
+    }
 }

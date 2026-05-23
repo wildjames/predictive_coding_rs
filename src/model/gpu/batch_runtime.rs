@@ -8,28 +8,31 @@ use super::context::GpuContext;
 use super::layout::PcBindGroupLayouts;
 use super::pipelines::PcPipelines;
 
-/// Batch-parallel GPU runtime
+/// Batch-parallel GPU runtime (fused dispatch)
 ///
-/// Holds N copies of per-sample state buffers (one per batch slot) and a single
-/// shared set of weights. All N samples converge simultaneously via batched
-/// kernel dispatches, which I hope maximises the gpu usage during training.
-pub struct GpuBatchRuntime {
+/// All batch slots' per-sample state is stored in single fused buffers (slot k's
+/// data starts at offset `k * layer_size`). Convergence dispatches use the Y
+/// dimension for the slot index so the GPU processes all slots in parallel within
+/// a single dispatch call per layer.
+pub struct GpuRuntime {
     ctx: Arc<GpuContext>,
     config: PredictiveCodingModelConfig,
     buffers: BatchModelBuffers,
     #[allow(dead_code)]
     layouts: PcBindGroupLayouts,
     pipelines: PcPipelines,
-    /// pe_bind_groups[slot][pair_idx] - predict/error bind groups per slot.
-    pe_bind_groups: Vec<Vec<wgpu::BindGroup>>,
-    /// pe_top_bind_groups[slot] - top-layer bind group per slot.
-    pe_top_bind_groups: Vec<wgpu::BindGroup>,
-    /// tw_bind_groups[slot][layer_idx] - timestep/weight bind groups per slot.
-    tw_bind_groups: Vec<Vec<wgpu::BindGroup>>,
+    /// pe_bind_groups[pair_idx] - predict/error bind group per layer pair.
+    /// Binds fused buffers for upper layer (i+1) and lower layer (i).
+    pe_bind_groups: Vec<wgpu::BindGroup>,
+    /// Top-layer bind group (top layer as both upper and lower for error computation).
+    pe_top_bind_group: wgpu::BindGroup,
+    /// tw_bind_groups[layer_idx] - timestep/weight bind group per layer.
+    /// Binds fused buffers for the given layer.
+    tw_bind_groups: Vec<wgpu::BindGroup>,
     batch_size: u32,
 }
 
-impl GpuBatchRuntime {
+impl GpuRuntime {
     /// Build a batch-parallel GPU runtime from a model snapshot.
     pub async fn from_snapshot_async(snapshot: &ModelSnapshot, batch_size: u32) -> Result<Self> {
         let ctx = GpuContext::new().await?;
@@ -46,9 +49,9 @@ impl GpuBatchRuntime {
         let layouts = PcBindGroupLayouts::new(&ctx);
         let pipelines = PcPipelines::new(&ctx, &layouts);
 
-        let (pe_bind_groups, pe_top_bind_groups) =
-            Self::build_all_pe_bind_groups(&ctx, &layouts, &buffers);
-        let tw_bind_groups = Self::build_all_tw_bind_groups(&ctx, &layouts, &buffers);
+        let pe_bind_groups = Self::build_pe_bind_groups(&ctx, &layouts, &buffers);
+        let pe_top_bind_group = Self::build_pe_top_bind_group(&ctx, &layouts, &buffers);
+        let tw_bind_groups = Self::build_tw_bind_groups(&ctx, &layouts, &buffers);
 
         Ok(Self {
             ctx,
@@ -57,7 +60,7 @@ impl GpuBatchRuntime {
             layouts,
             pipelines,
             pe_bind_groups,
-            pe_top_bind_groups,
+            pe_top_bind_group,
             tw_bind_groups,
             batch_size,
         })
@@ -95,246 +98,192 @@ impl GpuBatchRuntime {
     // Bind group construction
     // -------------------------------------------------------------------
 
-    /// Build predict/error bind groups for all slots.
-    fn build_all_pe_bind_groups(
+    /// Build predict/error bind groups - one per adjacent layer pair.
+    /// Each bind group references the fused buffers (all slots concatenated).
+    fn build_pe_bind_groups(
         ctx: &Arc<GpuContext>,
         layouts: &PcBindGroupLayouts,
         buffers: &BatchModelBuffers,
-    ) -> (Vec<Vec<wgpu::BindGroup>>, Vec<wgpu::BindGroup>) {
+    ) -> Vec<wgpu::BindGroup> {
         let n = buffers.layers.len();
-        let batch_size = buffers.batch_size as usize;
+        let mut groups = Vec::with_capacity(n.saturating_sub(1));
 
-        let mut all_pe: Vec<Vec<wgpu::BindGroup>> = Vec::with_capacity(batch_size);
-        let mut all_top: Vec<wgpu::BindGroup> = Vec::with_capacity(batch_size);
+        for i in 0..n.saturating_sub(1) {
+            let upper_layer = &buffers.layers[i + 1];
+            let lower_layer = &buffers.layers[i];
+            let label = format!("batch_pe_pair_{i}_{}", i + 1);
 
-        for slot in 0..batch_size {
-            let mut slot_groups: Vec<wgpu::BindGroup> = Vec::with_capacity(n.saturating_sub(1));
-
-            // For each adjacent pair (upper=i+1, lower=i), create a bind group
-            // that uses slot-specific values/predictions/errors but shared weights/meta.
-            for i in 0..n.saturating_sub(1) {
-                let upper_layer = &buffers.layers[i + 1];
-                let lower_layer = &buffers.layers[i];
-                let label = format!("batch_pe_s{slot}_pair_{i}_{}", i + 1);
-
-                // Build a LayerBuffers view for this slot
-                let bg = Self::create_pe_bind_group_for_slot(
-                    ctx,
-                    layouts,
-                    &upper_layer.slots[slot].values,
-                    &upper_layer.weights,
-                    &upper_layer.meta,
-                    &lower_layer.slots[slot].values,
-                    &lower_layer.slots[slot].predictions,
-                    &lower_layer.slots[slot].errors,
-                    &lower_layer.meta,
-                    &buffers.params,
-                    &buffers.error_sum[slot],
-                    &label,
-                );
-                slot_groups.push(bg);
-            }
-            all_pe.push(slot_groups);
-
-            // Top-layer bind group for this slot
-            let top_idx = n - 1;
-            let top_layer = &buffers.layers[top_idx];
-            let top_label = format!("batch_pe_s{slot}_top");
-            let top_bg = Self::create_pe_bind_group_for_slot(
-                ctx,
-                layouts,
-                &top_layer.slots[slot].values,
-                &top_layer.weights,
-                &top_layer.meta,
-                &top_layer.slots[slot].values,
-                &top_layer.slots[slot].predictions,
-                &top_layer.slots[slot].errors,
-                &top_layer.meta,
-                &buffers.params,
-                &buffers.error_sum[slot],
-                &top_label,
-            );
-            all_top.push(top_bg);
+            let bg = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(&label),
+                layout: &layouts.predict_error,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: upper_layer.values.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: upper_layer.weights.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: upper_layer.meta.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: lower_layer.values.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: lower_layer.predictions.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: lower_layer.errors.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 6,
+                        resource: lower_layer.meta.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 7,
+                        resource: buffers.params.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 8,
+                        resource: buffers.error_sum.as_entire_binding(),
+                    },
+                ],
+            });
+            groups.push(bg);
         }
 
-        (all_pe, all_top)
+        groups
     }
 
-    /// Create a predict/error bind group with explicit buffer references.
-    #[allow(clippy::too_many_arguments)]
-    fn create_pe_bind_group_for_slot(
+    /// Build top-layer bind group (top layer as both upper and lower).
+    fn build_pe_top_bind_group(
         ctx: &Arc<GpuContext>,
         layouts: &PcBindGroupLayouts,
-        upper_values: &wgpu::Buffer,
-        upper_weights: &wgpu::Buffer,
-        upper_meta: &wgpu::Buffer,
-        lower_values: &wgpu::Buffer,
-        lower_predictions: &wgpu::Buffer,
-        lower_errors: &wgpu::Buffer,
-        lower_meta: &wgpu::Buffer,
-        params: &wgpu::Buffer,
-        error_sum: &wgpu::Buffer,
-        label: &str,
+        buffers: &BatchModelBuffers,
     ) -> wgpu::BindGroup {
+        let top = &buffers.layers[buffers.layers.len() - 1];
         ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some(label),
+            label: Some("batch_pe_top"),
             layout: &layouts.predict_error,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: upper_values.as_entire_binding(),
+                    resource: top.values.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: upper_weights.as_entire_binding(),
+                    resource: top.weights.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: upper_meta.as_entire_binding(),
+                    resource: top.meta.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: lower_values.as_entire_binding(),
+                    resource: top.values.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 4,
-                    resource: lower_predictions.as_entire_binding(),
+                    resource: top.predictions.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 5,
-                    resource: lower_errors.as_entire_binding(),
+                    resource: top.errors.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 6,
-                    resource: lower_meta.as_entire_binding(),
+                    resource: top.meta.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 7,
-                    resource: params.as_entire_binding(),
+                    resource: buffers.params.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 8,
-                    resource: error_sum.as_entire_binding(),
+                    resource: buffers.error_sum.as_entire_binding(),
                 },
             ],
         })
     }
 
-    /// Build timestep/weight bind groups for all slots.
-    fn build_all_tw_bind_groups(
+    /// Build timestep/weight bind groups - one per layer.
+    fn build_tw_bind_groups(
         ctx: &Arc<GpuContext>,
         layouts: &PcBindGroupLayouts,
         buffers: &BatchModelBuffers,
-    ) -> Vec<Vec<wgpu::BindGroup>> {
+    ) -> Vec<wgpu::BindGroup> {
         let n = buffers.layers.len();
-        let batch_size = buffers.batch_size as usize;
+        let mut groups = Vec::with_capacity(n);
 
-        let mut all_tw: Vec<Vec<wgpu::BindGroup>> = Vec::with_capacity(batch_size);
+        for i in 0..n {
+            let layer = &buffers.layers[i];
+            let lower_errors_buf = if i == 0 {
+                &buffers.dummy_lower_errors
+            } else {
+                &buffers.layers[i - 1].errors
+            };
+            let label = format!("batch_tw_layer_{i}");
 
-        for slot in 0..batch_size {
-            let mut slot_groups: Vec<wgpu::BindGroup> = Vec::with_capacity(n);
-
-            for i in 0..n {
-                let layer = &buffers.layers[i];
-                let lower_errors_buf = if i == 0 {
-                    &buffers.dummy_lower_errors
-                } else {
-                    &buffers.layers[i - 1].slots[slot].errors
-                };
-                let label = format!("batch_tw_s{slot}_layer_{i}");
-
-                let bg = Self::create_tw_bind_group_for_slot(
-                    ctx,
-                    layouts,
-                    &buffers.params,
-                    &layer.slots[slot].weight_deltas,
-                    &layer.slots[slot].gain_errors,
-                    &layer.meta,
-                    &layer.slots[slot].values,
-                    &layer.weights,
-                    &layer.slots[slot].errors,
-                    &layer.slots[slot].value_changes,
-                    lower_errors_buf,
-                    &buffers.value_change_sum[slot],
-                    &layer.weight_deltas_accum,
-                    &label,
-                );
-                slot_groups.push(bg);
-            }
-            all_tw.push(slot_groups);
+            let bg = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(&label),
+                layout: &layouts.timestep_weight,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: buffers.params.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: layer.weight_deltas.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: layer.gain_errors.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: layer.meta.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: layer.values.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: layer.weights.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 6,
+                        resource: layer.errors.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 7,
+                        resource: layer.value_changes.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 8,
+                        resource: lower_errors_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 9,
+                        resource: buffers.value_change_sum.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 10,
+                        resource: layer.weight_deltas_accum.as_entire_binding(),
+                    },
+                ],
+            });
+            groups.push(bg);
         }
 
-        all_tw
-    }
-
-    /// Create a timestep/weight bind group with explicit buffer references.
-    #[allow(clippy::too_many_arguments)]
-    fn create_tw_bind_group_for_slot(
-        ctx: &Arc<GpuContext>,
-        layouts: &PcBindGroupLayouts,
-        params: &wgpu::Buffer,
-        weight_deltas: &wgpu::Buffer,
-        gain_errors: &wgpu::Buffer,
-        upper_meta: &wgpu::Buffer,
-        upper_values: &wgpu::Buffer,
-        upper_weights: &wgpu::Buffer,
-        upper_errors: &wgpu::Buffer,
-        upper_value_changes: &wgpu::Buffer,
-        lower_errors: &wgpu::Buffer,
-        value_change_sum: &wgpu::Buffer,
-        weight_deltas_accum: &wgpu::Buffer,
-        label: &str,
-    ) -> wgpu::BindGroup {
-        ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some(label),
-            layout: &layouts.timestep_weight,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: params.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: weight_deltas.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: gain_errors.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: upper_meta.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: upper_values.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: upper_weights.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 6,
-                    resource: upper_errors.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 7,
-                    resource: upper_value_changes.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 8,
-                    resource: lower_errors.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 9,
-                    resource: value_change_sum.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 10,
-                    resource: weight_deltas_accum.as_entire_binding(),
-                },
-            ],
-        })
+        groups
     }
 
     // -------------------------------------------------------------------
@@ -344,12 +293,13 @@ impl GpuBatchRuntime {
     /// Upload input/output for all batch slots at once.
     ///
     /// `samples` must have exactly `batch_size` elements, each `(input, output)`.
+    /// Data is written into the fused buffers at the appropriate slot offset.
     pub fn set_batch_data(&self, samples: &[(Vec<f32>, Vec<f32>)]) -> Result<()> {
         let n = self.buffers.layers.len();
         let first_size = self.buffers.layers[0].size;
         let last_size = self.buffers.layers[n - 1].size;
 
-        if !samples.len() == self.batch_size as usize {
+        if samples.len() != self.batch_size as usize {
             return Err(PredictiveCodingError::validation(format!(
                 "expected {} samples, got {}",
                 self.batch_size,
@@ -371,22 +321,24 @@ impl GpuBatchRuntime {
                 )));
             }
 
-            // Upload input values to slot's layer 0
+            // Write input values at slot offset in fused layer 0 values buffer
+            let input_byte_offset = (slot * first_size * std::mem::size_of::<f32>()) as u64;
             self.ctx.queue.write_buffer(
-                &self.buffers.layers[0].slots[slot].values,
-                0,
+                &self.buffers.layers[0].values,
+                input_byte_offset,
                 bytemuck::cast_slice(input),
             );
 
-            // Upload output values to slot's last layer
+            // Write output values at slot offset in fused last layer values buffer
+            let output_byte_offset = (slot * last_size * std::mem::size_of::<f32>()) as u64;
             self.ctx.queue.write_buffer(
-                &self.buffers.layers[n - 1].slots[slot].values,
-                0,
+                &self.buffers.layers[n - 1].values,
+                output_byte_offset,
                 bytemuck::cast_slice(output),
             );
         }
 
-        // pin the input and output layers
+        // Pin the input and output layers
         self.ctx.queue.write_buffer(
             &self.buffers.layers[0].meta,
             0,
@@ -402,111 +354,118 @@ impl GpuBatchRuntime {
     }
 
     /// Reinitialise latent values for all batch slots (interior layers).
+    /// Data is written into the fused values buffers at appropriate slot offsets.
     pub fn reinitialise_all_latents(&self) {
         let mut rng = rand::rng();
         let n = self.buffers.layers.len();
 
-        for slot in 0..self.batch_size as usize {
-            for i in 1..n - 1 {
-                let size = self.buffers.layers[i].size;
-                let data: Vec<f32> = (0..size)
-                    .map(|_| rand::RngExt::random_range(&mut rng, 0.0..1.0))
-                    .collect();
-                self.ctx.queue.write_buffer(
-                    &self.buffers.layers[i].slots[slot].values,
-                    0,
-                    bytemuck::cast_slice(&data),
-                );
-            }
+        for i in 1..n - 1 {
+            let size = self.buffers.layers[i].size;
+            // Generate random data for ALL slots at once (contiguous)
+            let total_elements = size * self.batch_size as usize;
+            let data: Vec<f32> = (0..total_elements)
+                .map(|_| rand::RngExt::random_range(&mut rng, 0.0..1.0))
+                .collect();
+            self.ctx.queue.write_buffer(
+                &self.buffers.layers[i].values,
+                0,
+                bytemuck::cast_slice(&data),
+            );
         }
     }
 
-    /// Run the convergence loop for all slots simultaneously (fixed-step, no readback).
+    /// Run the convergence loop for all slots simultaneously using fused dispatches.
     ///
-    /// Each iteration uses one compute pass per phase (predict, errors, gain_errors,
-    /// timestep). Dispatches within a phase target independent per-slot buffers, so
-    /// no intra-pass barriers are needed. The implicit barrier between passes
-    /// synchronises the phases.
+    /// Each iteration dispatches one compute pass per phase (predict, errors,
+    /// gain_errors, timestep) with Y=batch_size so all slots are processed in
+    /// a single GPU dispatch per layer. The implicit barrier between compute
+    /// passes synchronises phases.
+    ///
+    /// Convergence is split into chunks of iterations, each submitted as a
+    /// separate command buffer, to avoid GPU timeout (TDR) on long runs.
     pub fn converge_all(&self) -> Result<u32> {
         let steps = self.config.convergence_steps;
         let n = self.buffers.layers.len();
+        let bs = self.batch_size;
 
-        let mut encoder = self
-            .ctx
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("batch_converge_encoder"),
-            });
+        // Submit in chunks to avoid TDR on Windows
+        const CHUNK_SIZE: u32 = 10;
+        let mut remaining = steps;
 
-        for _ in 0..steps {
-            // --- Predictions (top-down) ---
-            {
-                let mut pass = encoder.begin_compute_pass(&Default::default());
-                pass.set_pipeline(&self.pipelines.predict);
-                for slot in 0..self.batch_size as usize {
-                    for pair_idx in (0..self.pe_bind_groups[slot].len()).rev() {
+        while remaining > 0 {
+            let chunk = remaining.min(CHUNK_SIZE);
+            remaining -= chunk;
+
+            let mut encoder = self
+                .ctx
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("batch_converge_encoder"),
+                });
+
+            for _ in 0..chunk {
+                // --- Predictions (top-down) ---
+                {
+                    let mut pass = encoder.begin_compute_pass(&Default::default());
+                    pass.set_pipeline(&self.pipelines.predict);
+                    for pair_idx in (0..self.pe_bind_groups.len()).rev() {
                         let lower_size = self.buffers.layers[pair_idx].size as u32;
-                        let workgroups = lower_size.div_ceil(64);
-                        pass.set_bind_group(0, &self.pe_bind_groups[slot][pair_idx], &[]);
-                        pass.dispatch_workgroups(workgroups, 1, 1);
+                        let workgroups_x = lower_size.div_ceil(64);
+                        pass.set_bind_group(0, &self.pe_bind_groups[pair_idx], &[]);
+                        pass.dispatch_workgroups(workgroups_x, bs, 1);
                     }
                 }
-            }
 
-            // --- Errors ---
-            {
-                let mut pass = encoder.begin_compute_pass(&Default::default());
-                pass.set_pipeline(&self.pipelines.errors);
-                for slot in 0..self.batch_size as usize {
-                    for (i, bg) in self.pe_bind_groups[slot].iter().enumerate() {
+                // --- Errors ---
+                {
+                    let mut pass = encoder.begin_compute_pass(&Default::default());
+                    pass.set_pipeline(&self.pipelines.errors);
+                    for (i, bg) in self.pe_bind_groups.iter().enumerate() {
                         let lower_size = self.buffers.layers[i].size as u32;
-                        let workgroups = lower_size.div_ceil(64);
+                        let workgroups_x = lower_size.div_ceil(64);
                         pass.set_bind_group(0, bg, &[]);
-                        pass.dispatch_workgroups(workgroups, 1, 1);
+                        pass.dispatch_workgroups(workgroups_x, bs, 1);
                     }
                     // Top layer
                     let top_size = self.buffers.layers[n - 1].size as u32;
-                    let workgroups = top_size.div_ceil(64);
-                    pass.set_bind_group(0, &self.pe_top_bind_groups[slot], &[]);
-                    pass.dispatch_workgroups(workgroups, 1, 1);
+                    let workgroups_x = top_size.div_ceil(64);
+                    pass.set_bind_group(0, &self.pe_top_bind_group, &[]);
+                    pass.dispatch_workgroups(workgroups_x, bs, 1);
                 }
-            }
 
-            // --- Gain errors ---
-            {
-                let mut pass = encoder.begin_compute_pass(&Default::default());
-                pass.set_pipeline(&self.pipelines.compute_gain_errors);
-                for slot in 0..self.batch_size as usize {
+                // --- Gain errors ---
+                {
+                    let mut pass = encoder.begin_compute_pass(&Default::default());
+                    pass.set_pipeline(&self.pipelines.compute_gain_errors);
                     for i in 0..n {
                         let lb = &self.buffers.layers[i];
                         let total = lb.weight_rows as u32;
                         if total == 0 {
                             continue;
                         }
-                        let workgroups = total.div_ceil(64);
-                        pass.set_bind_group(0, &self.tw_bind_groups[slot][i], &[]);
-                        pass.dispatch_workgroups(workgroups, 1, 1);
+                        let workgroups_x = total.div_ceil(64);
+                        pass.set_bind_group(0, &self.tw_bind_groups[i], &[]);
+                        pass.dispatch_workgroups(workgroups_x, bs, 1);
                     }
                 }
-            }
 
-            // --- Timestep (value updates) ---
-            {
-                let mut pass = encoder.begin_compute_pass(&Default::default());
-                pass.set_pipeline(&self.pipelines.timestep);
-                for slot in 0..self.batch_size as usize {
+                // --- Timestep (value updates) ---
+                {
+                    let mut pass = encoder.begin_compute_pass(&Default::default());
+                    pass.set_pipeline(&self.pipelines.timestep);
                     for i in 0..n {
                         let lb = &self.buffers.layers[i];
                         let total = lb.size as u32;
-                        let workgroups = total.div_ceil(64);
-                        pass.set_bind_group(0, &self.tw_bind_groups[slot][i], &[]);
-                        pass.dispatch_workgroups(workgroups, 1, 1);
+                        let workgroups_x = total.div_ceil(64);
+                        pass.set_bind_group(0, &self.tw_bind_groups[i], &[]);
+                        pass.dispatch_workgroups(workgroups_x, bs, 1);
                     }
                 }
             }
+
+            self.ctx.queue.submit(std::iter::once(encoder.finish()));
         }
 
-        self.ctx.queue.submit(std::iter::once(encoder.finish()));
         Ok(steps)
     }
 
@@ -524,72 +483,91 @@ impl GpuBatchRuntime {
 
     /// Accumulate weight deltas from all slots into the shared accum buffer.
     ///
-    /// For each slot: dispatch compute_gain_errors -> compute_weight_deltas -> accumulate.
+    /// Three phases:
+    ///   1. compute_gain_errors: all slots in parallel (Y=batch_size)
+    ///   2. For each slot: set params.current_slot, compute_weight_deltas (Y=1),
+    ///      then accumulate_weight_deltas (Y=1)
     pub fn accumulate_all_weight_deltas(&self) {
         let n = self.buffers.layers.len();
+        let bs = self.batch_size;
 
-        let mut encoder = self
-            .ctx
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("batch_accumulate_encoder"),
-            });
-
-        for slot in 0..self.batch_size as usize {
-            // Pass 1: compute_gain_errors for layers 1..n
+        // Phase 1: compute_gain_errors for all slots in parallel (fused gain_errors buffer)
+        {
+            let mut encoder = self
+                .ctx
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("batch_gain_errors_encoder"),
+                });
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&self.pipelines.compute_gain_errors);
             for i in 1..n {
                 let lb = &self.buffers.layers[i];
                 let total = lb.weight_rows as u32;
                 if total == 0 {
                     continue;
                 }
-                let workgroups = total.div_ceil(64);
-
-                let mut pass = encoder.begin_compute_pass(&Default::default());
-                pass.set_pipeline(&self.pipelines.compute_gain_errors);
-                pass.set_bind_group(0, &self.tw_bind_groups[slot][i], &[]);
-                pass.dispatch_workgroups(workgroups, 1, 1);
+                let workgroups_x = total.div_ceil(64);
+                pass.set_bind_group(0, &self.tw_bind_groups[i], &[]);
+                pass.dispatch_workgroups(workgroups_x, bs, 1);
             }
-
-            // Pass 2: compute_weight_deltas for layers 1..n
-            for i in 1..n {
-                let lb = &self.buffers.layers[i];
-                let total = (lb.weight_rows * lb.weight_cols) as u32;
-                if total == 0 {
-                    continue;
-                }
-                let workgroups = total.div_ceil(64);
-
-                let mut pass = encoder.begin_compute_pass(&Default::default());
-                pass.set_pipeline(&self.pipelines.compute_weight_deltas);
-                pass.set_bind_group(0, &self.tw_bind_groups[slot][i], &[]);
-                pass.dispatch_workgroups(workgroups, 1, 1);
-            }
-
-            // Pass 3: accumulate_weight_deltas for layers 1..n
-            for i in 1..n {
-                let lb = &self.buffers.layers[i];
-                let total = (lb.weight_rows * lb.weight_cols) as u32;
-                if total == 0 {
-                    continue;
-                }
-                let workgroups = total.div_ceil(64);
-
-                let mut pass = encoder.begin_compute_pass(&Default::default());
-                pass.set_pipeline(&self.pipelines.accumulate_weight_deltas);
-                pass.set_bind_group(0, &self.tw_bind_groups[slot][i], &[]);
-                pass.dispatch_workgroups(workgroups, 1, 1);
-            }
+            drop(pass);
+            self.ctx.queue.submit(std::iter::once(encoder.finish()));
         }
 
-        self.ctx.queue.submit(std::iter::once(encoder.finish()));
+        // Phase 2 & 3: For each slot, compute weight deltas then accumulate
+        for slot in 0..bs {
+            // Write current_slot to params (offset 6 * 4 = 24 bytes)
+            self.ctx.queue.write_buffer(
+                &self.buffers.params,
+                24,
+                bytemuck::cast_slice(&[slot as f32]),
+            );
+
+            let mut encoder = self
+                .ctx
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("batch_wd_slot_encoder"),
+                });
+
+            // compute_weight_deltas (reads slot from params.current_slot)
+            {
+                let mut pass = encoder.begin_compute_pass(&Default::default());
+                pass.set_pipeline(&self.pipelines.compute_weight_deltas);
+                for i in 1..n {
+                    let lb = &self.buffers.layers[i];
+                    let total = (lb.weight_rows * lb.weight_cols) as u32;
+                    if total == 0 {
+                        continue;
+                    }
+                    let workgroups_x = total.div_ceil(64);
+                    pass.set_bind_group(0, &self.tw_bind_groups[i], &[]);
+                    pass.dispatch_workgroups(workgroups_x, 1, 1);
+                }
+            }
+
+            // accumulate_weight_deltas (adds weight_deltas into accum)
+            {
+                let mut pass = encoder.begin_compute_pass(&Default::default());
+                pass.set_pipeline(&self.pipelines.accumulate_weight_deltas);
+                for i in 1..n {
+                    let lb = &self.buffers.layers[i];
+                    let total = (lb.weight_rows * lb.weight_cols) as u32;
+                    if total == 0 {
+                        continue;
+                    }
+                    let workgroups_x = total.div_ceil(64);
+                    pass.set_bind_group(0, &self.tw_bind_groups[i], &[]);
+                    pass.dispatch_workgroups(workgroups_x, 1, 1);
+                }
+            }
+
+            self.ctx.queue.submit(std::iter::once(encoder.finish()));
+        }
     }
 
     /// Apply the accumulated weight deltas to the shared weight matrices.
-    ///
-    /// Uses a dedicated set of bind groups that reference the shared weights
-    /// and the shared weight_deltas_accum. I reuse slot 0's tw_bind_groups
-    /// since the weights and accum buffers are shared across all slots.
     pub fn apply_accumulated_weight_deltas(&self) {
         let n = self.buffers.layers.len();
 
@@ -600,19 +578,19 @@ impl GpuBatchRuntime {
                 label: Some("batch_apply_accum_encoder"),
             });
 
-        // Use slot 0's bind groups - they reference the same shared weights/accum
-        for i in 1..n {
-            let lb = &self.buffers.layers[i];
-            let total = (lb.weight_rows * lb.weight_cols) as u32;
-            if total == 0 {
-                continue;
-            }
-            let workgroups = total.div_ceil(64);
-
+        {
             let mut pass = encoder.begin_compute_pass(&Default::default());
             pass.set_pipeline(&self.pipelines.apply_accumulated_weight_deltas);
-            pass.set_bind_group(0, &self.tw_bind_groups[0][i], &[]);
-            pass.dispatch_workgroups(workgroups, 1, 1);
+            for i in 1..n {
+                let lb = &self.buffers.layers[i];
+                let total = (lb.weight_rows * lb.weight_cols) as u32;
+                if total == 0 {
+                    continue;
+                }
+                let workgroups_x = total.div_ceil(64);
+                pass.set_bind_group(0, &self.tw_bind_groups[i], &[]);
+                pass.dispatch_workgroups(workgroups_x, 1, 1);
+            }
         }
 
         self.ctx.queue.submit(std::iter::once(encoder.finish()));
@@ -623,6 +601,61 @@ impl GpuBatchRuntime {
         self.ctx
             .queue
             .write_buffer(&self.buffers.params, 0, bytemuck::cast_slice(&[alpha]));
+    }
+
+    /// Compute total energy (0.5 * sum of squared errors) for batch slot 0.
+    ///
+    /// Dispatches the `reduce_error_sq` shader with Y=1 so only slot 0 is
+    /// reduced, then downloads and sums the partial-sum buffer.
+    pub fn total_energy(&self) -> Result<f32> {
+        // Dispatch reduce_error_sq over all pe_bind_groups + top
+        let mut encoder = self
+            .ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("batch_reduce_error_sq"),
+            });
+
+        for (i, bg) in self.pe_bind_groups.iter().enumerate() {
+            let lower_size = self.buffers.layers[i].size as u32;
+            let workgroups_x = lower_size.div_ceil(64);
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&self.pipelines.sum_error_sq);
+            pass.set_bind_group(0, bg, &[]);
+            pass.dispatch_workgroups(workgroups_x, 1, 1);
+        }
+
+        // Top layer
+        let top_idx = self.buffers.layers.len() - 1;
+        let top_size = self.buffers.layers[top_idx].size as u32;
+        let workgroups_x = top_size.div_ceil(64);
+        {
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&self.pipelines.sum_error_sq);
+            pass.set_bind_group(0, &self.pe_top_bind_group, &[]);
+            pass.dispatch_workgroups(workgroups_x, 1, 1);
+        }
+
+        self.ctx.queue.submit(std::iter::once(encoder.finish()));
+        self.ctx
+            .device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .unwrap();
+
+        // Download partial sums
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| {
+                PredictiveCodingError::validation(format!("tokio runtime creation failed: {e}"))
+            })?;
+        let partial = rt.block_on(read_buffer_f32_pub(
+            &self.ctx,
+            &self.buffers.error_sum,
+            self.buffers.total_sums,
+        ))?;
+        let sum_sq: f32 = partial.iter().sum();
+        Ok(0.5 * sum_sq)
     }
 
     /// Block until all submitted GPU work has completed. Returns the wall-clock
@@ -648,7 +681,7 @@ impl GpuBatchRuntime {
 
     /// Download the current weights from the GPU to produce a snapshot.
     ///
-    /// Uses a blocking tokio runtime for the async readback.
+    /// Uses slot 0's values/predictions/errors for the snapshot.
     pub fn snapshot(&self) -> Result<ModelSnapshot> {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -667,16 +700,11 @@ impl GpuBatchRuntime {
                 vec![]
             };
 
-            // Use slot 0's values/predictions/errors for the snapshot
-            let values =
-                rt.block_on(read_buffer_f32_pub(&self.ctx, &lb.slots[0].values, lb.size))?;
-            let predictions = rt.block_on(read_buffer_f32_pub(
-                &self.ctx,
-                &lb.slots[0].predictions,
-                lb.size,
-            ))?;
-            let errors =
-                rt.block_on(read_buffer_f32_pub(&self.ctx, &lb.slots[0].errors, lb.size))?;
+            // Download slot 0's values/predictions/errors from fused buffers
+            let values = rt.block_on(read_buffer_f32_pub(&self.ctx, &lb.values, lb.size))?;
+            let predictions =
+                rt.block_on(read_buffer_f32_pub(&self.ctx, &lb.predictions, lb.size))?;
+            let errors = rt.block_on(read_buffer_f32_pub(&self.ctx, &lb.errors, lb.size))?;
 
             // Download meta to get pinned/activation
             let meta = rt.block_on(read_buffer_u32_pub(&self.ctx, &lb.meta, 7))?;

@@ -29,8 +29,8 @@ struct ModelParams {
     conv_thresh: f32,
     conv_steps: f32,
     weight_clip: f32,
-    _pad1: f32,
-    _pad2: f32,
+    batch_size: f32,
+    current_slot: f32,
     _pad3: f32,
 }
 
@@ -77,7 +77,9 @@ fn weight_index(row: u32, col: u32, num_cols: u32) -> u32 {
 /// for each row i of the weight matrix.
 ///
 /// Must be dispatched BEFORE values_timestep and compute_weight_deltas.
-/// One thread per weight row (i.e., per lower-layer node).
+/// One thread per weight row (i.e., per lower-layer node). gid.y selects the batch slot.
+/// Per-slot buffers are stored as contiguous runs: slot k starts at k * size.
+/// Weights are shared across all slots so no Y offset is applied to them.
 @compute @workgroup_size(64)
 fn compute_gain_errors(@builtin(global_invocation_id) gid: vec3<u32>) {
     let weight_rows = upper_meta[3];
@@ -89,13 +91,17 @@ fn compute_gain_errors(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     let act_fn = upper_meta[1];
+    let slot = gid.y;
+    let upper_offset = slot * weight_cols;
+    let gain_offset  = slot * weight_rows;
+    let lower_offset = slot * weight_rows;
 
     var preact: f32 = 0.0;
     for (var k: u32 = 0u; k < weight_cols; k = k + 1u) {
-        preact += upper_weights[weight_index(i, k, weight_cols)] * upper_values[k];
+        preact += upper_weights[weight_index(i, k, weight_cols)] * upper_values[upper_offset + k];
     }
 
-    gain_errors[i] = activation_derivative(preact, act_fn) * lower_errors[i];
+    gain_errors[gain_offset + i] = activation_derivative(preact, act_fn) * lower_errors[lower_offset + i];
 }
 
 /// Update the **upper** layer's node values.
@@ -113,7 +119,7 @@ fn compute_gain_errors(@builtin(global_invocation_id) gid: vec3<u32>) {
 ///
 /// Writes abs(value_change) to upper_value_changes for convergence detection.
 ///
-/// One thread per upper-layer node.
+/// One thread per upper-layer node. gid.y selects the batch slot.
 @compute @workgroup_size(64)
 fn values_timestep(@builtin(global_invocation_id) gid: vec3<u32>) {
     let upper_size  = upper_meta[2];
@@ -123,10 +129,13 @@ fn values_timestep(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
+    let slot        = gid.y;
+    let upper_offset = slot * upper_size;
+
     // Pinned layers don't update.
     let pinned = upper_meta[0];
     if pinned != 0u {
-        upper_value_changes[idx] = 0.0;
+        upper_value_changes[upper_offset + idx] = 0.0;
         return;
     }
 
@@ -135,12 +144,14 @@ fn values_timestep(@builtin(global_invocation_id) gid: vec3<u32>) {
     let weight_rows = upper_meta[3]; // == lower_size
     let weight_cols = upper_meta[4]; // == upper_size
 
+    let gain_offset = slot * weight_rows;
+
     // rhs[j] = W^T · gain_errors  evaluated at column j
     //        = sum_i W[i][j] * gain_errors[i]
     var rhs: f32 = 0.0;
     if weight_rows > 0u {
         for (var i: u32 = 0u; i < weight_rows; i = i + 1u) {
-            rhs += upper_weights[weight_index(i, idx, weight_cols)] * gain_errors[i];
+            rhs += upper_weights[weight_index(i, idx, weight_cols)] * gain_errors[gain_offset + i];
         }
     }
 
@@ -148,11 +159,11 @@ fn values_timestep(@builtin(global_invocation_id) gid: vec3<u32>) {
     if is_top != 0u {
         value_change = rhs * gamma;
     } else {
-        value_change = (-upper_errors[idx] + rhs) * gamma;
+        value_change = (-upper_errors[upper_offset + idx] + rhs) * gamma;
     }
 
-    upper_values[idx] = upper_values[idx] + value_change;
-    upper_value_changes[idx] = abs(value_change);
+    upper_values[upper_offset + idx] = upper_values[upper_offset + idx] + value_change;
+    upper_value_changes[upper_offset + idx] = abs(value_change);
 }
 
 /// Compute weight deltas into a separate buffer (no race on upper_weights).
@@ -160,7 +171,9 @@ fn values_timestep(@builtin(global_invocation_id) gid: vec3<u32>) {
 /// delta_W[i][j] = alpha * gain_errors[i] * upper_values[j]
 ///
 /// Requires compute_gain_errors to have been dispatched first.
-/// One thread per weight element.
+/// One thread per weight element. Reads slot index from params.current_slot
+/// (set by the host before each dispatch during accumulation).
+/// Output is NOT fused - writes to weight_deltas without slot offset.
 @compute @workgroup_size(64)
 fn compute_weight_deltas(@builtin(global_invocation_id) gid: vec3<u32>) {
     let weight_rows = upper_meta[3]; // lower_size
@@ -175,9 +188,13 @@ fn compute_weight_deltas(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = flat_idx / weight_cols; // row (lower node index)
     let j = flat_idx % weight_cols; // col (upper node index)
 
+    let slot = u32(params.current_slot);
+    let gain_offset   = slot * weight_rows;
+    let upper_offset  = slot * weight_cols;
+
     let alpha = params.alpha;
     let weight_clip = params.weight_clip;
-    var delta = alpha * gain_errors[i] * upper_values[j];
+    var delta = alpha * gain_errors[gain_offset + i] * upper_values[upper_offset + j];
 
     // Clip weight deltas when weight_clip > 0
     if weight_clip > 0.0 {
@@ -192,6 +209,7 @@ fn compute_weight_deltas(@builtin(global_invocation_id) gid: vec3<u32>) {
 /// W[i][j] += weight_deltas[i * cols + j]
 ///
 /// One thread per weight element. Must be dispatched AFTER compute_weight_deltas.
+/// weight_deltas is single-slot sized (no fused offset).
 @compute @workgroup_size(64)
 fn apply_weight_deltas(@builtin(global_invocation_id) gid: vec3<u32>) {
     let weight_rows = upper_meta[3];
@@ -215,6 +233,7 @@ var<workgroup> shared_vc_sum: array<f32, 64>;
 /// `vc_partial_sums[offset + workgroup_id]`, where `offset` comes from
 /// `upper_meta[6]`.  This lets every layer write to its own region of the
 /// shared vc_partial_sums buffer in a single dispatch.
+/// gid.y selects the batch slot (expected to be 0 for single-sample usage).
 @compute @workgroup_size(64)
 fn reduce_value_change(
     @builtin(global_invocation_id) gid: vec3<u32>,
@@ -224,9 +243,11 @@ fn reduce_value_change(
     let offset     = upper_meta[6]; // per-layer offset into vc_partial_sums
     let idx        = gid.x;
     let local_idx  = lid.x;
+    let slot         = gid.y;
+    let upper_offset = slot * upper_size;
 
     if idx < upper_size {
-        shared_vc_sum[local_idx] = upper_value_changes[idx];
+        shared_vc_sum[local_idx] = upper_value_changes[upper_offset + idx];
     } else {
         shared_vc_sum[local_idx] = 0.0;
     }
@@ -249,6 +270,7 @@ fn reduce_value_change(
 /// accum[i] += weight_deltas[i]
 ///
 /// One thread per weight element. Must be dispatched AFTER compute_weight_deltas.
+/// For single-sample usage (gid.y == 0, weight_deltas sized for 1 slot).
 @compute @workgroup_size(64)
 fn accumulate_weight_deltas(@builtin(global_invocation_id) gid: vec3<u32>) {
     let weight_rows = upper_meta[3];
@@ -261,6 +283,32 @@ fn accumulate_weight_deltas(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     weight_deltas_accum[flat_idx] = weight_deltas_accum[flat_idx] + weight_deltas[flat_idx];
+}
+
+/// Accumulate weight deltas from ALL batch slots into the accumulation buffer.
+///
+/// accum[i] += sum over all slots of weight_deltas[slot * total + i]
+///
+/// DEPRECATED for fused path. Now uses single-slot weight_deltas with per-slot
+/// dispatch. Kept for backward compatibility with single-sample runtime.
+/// For batch runtime, use accumulate_weight_deltas instead (single-slot buffer).
+@compute @workgroup_size(64)
+fn accumulate_weight_deltas_batch(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let weight_rows = upper_meta[3];
+    let weight_cols = upper_meta[4];
+    let total       = weight_rows * weight_cols;
+    let flat_idx    = gid.x;
+
+    if flat_idx >= total {
+        return;
+    }
+
+    let bs = u32(params.batch_size);
+    var sum: f32 = 0.0;
+    for (var s: u32 = 0u; s < bs; s = s + 1u) {
+        sum += weight_deltas[s * total + flat_idx];
+    }
+    weight_deltas_accum[flat_idx] = weight_deltas_accum[flat_idx] + sum;
 }
 
 /// Apply accumulated weight deltas from minibatch training to the weight matrix.

@@ -6,20 +6,20 @@ grab-mnist:
 build:
 	cargo build --release --all-features
 
-test: build
+test:
 	cargo test --release --all-features
 
 clean:
 	cargo clean
 
-train-gpu: build
+train-gpu:
 	cargo run --release --bin train --all-features data/training_gpu_batch_config.json
 
-bench: build
+bench:
 	cargo run --release --bin bench --all-features
 
-coverage: build
+coverage:
 	cargo llvm-cov
 
-estimate-batch-size: build
+estimate-batch-size:
 	cargo run --release --bin batch-size-advisor --all-features data/model_config.json

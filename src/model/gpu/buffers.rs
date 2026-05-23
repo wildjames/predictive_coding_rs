@@ -450,34 +450,35 @@ async fn read_buffer_u32(
 }
 
 // ---------------------------------------------------------------------------
-// Batch-parallel buffer set
+// Batch-parallel buffer set (fused: all slots concatenated in single buffers)
 // ---------------------------------------------------------------------------
 
-/// Per-slot buffers that are independent across samples in a minibatch.
-/// Each slot holds its own copy of values/predictions/errors/etc so that
-/// all samples can converge on the GPU.
-pub struct SlotBuffers {
-    pub values: wgpu::Buffer,
-    pub predictions: wgpu::Buffer,
-    pub errors: wgpu::Buffer,
-    pub gain_errors: wgpu::Buffer,
-    pub value_changes: wgpu::Buffer,
-    pub weight_deltas: wgpu::Buffer,
-}
-
-/// GPU-side storage for batch-parallel training
+/// GPU-side storage for batch-parallel training (single layer).
+///
+/// Per-slot data is stored in single fused buffers where slot k's data starts
+/// at offset `k * element_count`. This allows dispatching with Y=batch_size so
+/// the GPU processes all slots in a single dispatch.
 ///
 /// Shared buffers (weights, weight_deltas_accum, meta) are allocated once.
-/// Per-sample state buffers are replicated `batch_size` times so that all
-/// samples in a minibatch can converge in parallel.
 pub struct BatchLayerBuffers {
     pub batch_size: u32,
-    // --- Shared (one singlular buffer, shared) ---
+    // --- Shared (single buffer) ---
     pub weights: wgpu::Buffer,
     pub weight_deltas_accum: wgpu::Buffer,
     pub meta: wgpu::Buffer,
-    // --- Per-slot (batch_size copies) ---
-    pub slots: Vec<SlotBuffers>,
+    // --- Fused per-slot (batch_size copies concatenated) ---
+    /// Values for all slots: size = layer_size × batch_size
+    pub values: wgpu::Buffer,
+    /// Predictions for all slots: size = layer_size × batch_size
+    pub predictions: wgpu::Buffer,
+    /// Errors for all slots: size = layer_size × batch_size
+    pub errors: wgpu::Buffer,
+    /// Gain errors for all slots: size = max(weight_rows, 1) × batch_size
+    pub gain_errors: wgpu::Buffer,
+    /// Value changes for all slots: size = layer_size × batch_size
+    pub value_changes: wgpu::Buffer,
+    /// Weight deltas (single-slot sized): size = max(weight_count, 1)
+    pub weight_deltas: wgpu::Buffer,
     // Layer geometry (for dispatch sizing)
     pub size: usize,
     pub weight_rows: usize,
@@ -485,7 +486,7 @@ pub struct BatchLayerBuffers {
 }
 
 impl BatchLayerBuffers {
-    /// Allocate batch-parallel buffers for a single layer.
+    /// Allocate batch-parallel buffers for a single layer (fused layout).
     pub fn from_snapshot(
         ctx: &Arc<GpuContext>,
         layer: &crate::model::snapshot::LayerSnapshot,
@@ -494,8 +495,9 @@ impl BatchLayerBuffers {
         batch_size: u32,
     ) -> Self {
         let device = &ctx.device;
+        let bs = batch_size as usize;
 
-        // Shared
+        // Shared: weights
         let weights = device.create_buffer_init(&BufferInitDescriptor {
             label: Some("batch_layer_weights"),
             contents: if layer.weights.is_empty() {
@@ -506,7 +508,7 @@ impl BatchLayerBuffers {
             usage: BUF_USAGE,
         });
 
-        // Shared
+        // Shared: weight_deltas_accum
         let weight_delta_count = if layer.weights.is_empty() {
             1
         } else {
@@ -519,10 +521,10 @@ impl BatchLayerBuffers {
             usage: BUF_USAGE,
         });
 
-        // Shared
+        // Shared: meta
         let meta_data: [u32; 7] = [
             layer.pinned as u32,
-            super::buffers::activation_to_u32(layer.activation_function),
+            activation_to_u32(layer.activation_function),
             layer.size as u32,
             layer.weight_rows as u32,
             layer.weight_cols as u32,
@@ -535,74 +537,61 @@ impl BatchLayerBuffers {
             usage: BUF_USAGE,
         });
 
-        // Per-slot buffers
-        let mut slots = Vec::with_capacity(batch_size as usize);
-        for slot in 0..batch_size {
-            let slot_label = |name: &str| format!("batch_s{slot}_{name}");
+        // Fused per-slot buffers (concatenated: slot0 | slot1 | ... | slotN)
+        let values_data = vec![0.0_f32; layer.size * bs];
+        let values = device.create_buffer_init(&BufferInitDescriptor {
+            label: Some("batch_layer_values_fused"),
+            contents: bytemuck::cast_slice(&values_data),
+            usage: BUF_USAGE,
+        });
 
-            let values_data = vec![0.0_f32; layer.size];
-            let values = device.create_buffer_init(&BufferInitDescriptor {
-                label: Some(&slot_label("values")),
-                contents: bytemuck::cast_slice(&values_data),
-                usage: BUF_USAGE,
-            });
+        let predictions_data = vec![0.0_f32; layer.size * bs];
+        let predictions = device.create_buffer_init(&BufferInitDescriptor {
+            label: Some("batch_layer_predictions_fused"),
+            contents: bytemuck::cast_slice(&predictions_data),
+            usage: BUF_USAGE,
+        });
 
-            let predictions_data = vec![0.0_f32; layer.size];
-            let predictions = device.create_buffer_init(&BufferInitDescriptor {
-                label: Some(&slot_label("predictions")),
-                contents: bytemuck::cast_slice(&predictions_data),
-                usage: BUF_USAGE,
-            });
+        let errors_data = vec![0.0_f32; layer.size * bs];
+        let errors = device.create_buffer_init(&BufferInitDescriptor {
+            label: Some("batch_layer_errors_fused"),
+            contents: bytemuck::cast_slice(&errors_data),
+            usage: BUF_USAGE,
+        });
 
-            let errors_data = vec![0.0_f32; layer.size];
-            let errors = device.create_buffer_init(&BufferInitDescriptor {
-                label: Some(&slot_label("errors")),
-                contents: bytemuck::cast_slice(&errors_data),
-                usage: BUF_USAGE,
-            });
+        let gain_error_count = if layer.weight_rows == 0 { 1 } else { layer.weight_rows };
+        let gain_errors_data = vec![0.0_f32; gain_error_count * bs];
+        let gain_errors = device.create_buffer_init(&BufferInitDescriptor {
+            label: Some("batch_layer_gain_errors_fused"),
+            contents: bytemuck::cast_slice(&gain_errors_data),
+            usage: BUF_USAGE,
+        });
 
-            let gain_error_count = if layer.weight_rows == 0 {
-                1
-            } else {
-                layer.weight_rows
-            };
-            let gain_errors_data = vec![0.0_f32; gain_error_count];
-            let gain_errors = device.create_buffer_init(&BufferInitDescriptor {
-                label: Some(&slot_label("gain_errors")),
-                contents: bytemuck::cast_slice(&gain_errors_data),
-                usage: BUF_USAGE,
-            });
+        let value_changes_data = vec![0.0_f32; layer.size * bs];
+        let value_changes = device.create_buffer_init(&BufferInitDescriptor {
+            label: Some("batch_layer_value_changes_fused"),
+            contents: bytemuck::cast_slice(&value_changes_data),
+            usage: BUF_USAGE,
+        });
 
-            let value_changes_data = vec![0.0_f32; layer.size];
-            let value_changes = device.create_buffer_init(&BufferInitDescriptor {
-                label: Some(&slot_label("value_changes")),
-                contents: bytemuck::cast_slice(&value_changes_data),
-                usage: BUF_USAGE,
-            });
-
-            let weight_delta_zeros = vec![0.0_f32; weight_delta_count];
-            let weight_deltas = device.create_buffer_init(&BufferInitDescriptor {
-                label: Some(&slot_label("weight_deltas")),
-                contents: bytemuck::cast_slice(&weight_delta_zeros),
-                usage: BUF_USAGE,
-            });
-
-            slots.push(SlotBuffers {
-                values,
-                predictions,
-                errors,
-                gain_errors,
-                value_changes,
-                weight_deltas,
-            });
-        }
+        let weight_deltas_data = vec![0.0_f32; weight_delta_count];
+        let weight_deltas = device.create_buffer_init(&BufferInitDescriptor {
+            label: Some("batch_layer_weight_deltas"),
+            contents: bytemuck::cast_slice(&weight_deltas_data),
+            usage: BUF_USAGE,
+        });
 
         Self {
             batch_size,
             weights,
             weight_deltas_accum,
             meta,
-            slots,
+            values,
+            predictions,
+            errors,
+            gain_errors,
+            value_changes,
+            weight_deltas,
             size: layer.size,
             weight_rows: layer.weight_rows,
             weight_cols: layer.weight_cols,
@@ -614,20 +603,20 @@ impl BatchLayerBuffers {
 pub struct BatchModelBuffers {
     pub layers: Vec<BatchLayerBuffers>,
     pub batch_size: u32,
-    /// `[alpha: f32, gamma: f32, convergence_threshold: f32, convergence_steps: u32, weight_clip: f32, 0, 0, 0]`
+    /// `[alpha, gamma, conv_thresh, conv_steps, weight_clip, batch_size, 0, 0]`
     pub params: wgpu::Buffer,
     /// Dummy buffer for layer 0's timestep bind group (lower_errors slot).
     pub dummy_lower_errors: wgpu::Buffer,
-    /// Per-slot error_sum buffers for reduction (one per slot).
-    pub error_sum: Vec<wgpu::Buffer>,
-    /// Per-slot value_change_sum buffers for reduction (one per slot).
-    pub value_change_sum: Vec<wgpu::Buffer>,
+    /// Error sum buffer for reduction (not used during batch convergence).
+    pub error_sum: wgpu::Buffer,
+    /// Value change sum buffer for reduction (not used during batch convergence).
+    pub value_change_sum: wgpu::Buffer,
     /// Total number of f32 slots in each summing array.
     pub total_sums: usize,
 }
 
 impl BatchModelBuffers {
-    /// Upload a full model snapshot to the GPU with batch-parallel per-slot buffers.
+    /// Upload a full model snapshot to the GPU with batch-parallel fused buffers.
     pub fn from_snapshot(
         ctx: &Arc<GpuContext>,
         snapshot: &crate::model::snapshot::ModelSnapshot,
@@ -659,14 +648,14 @@ impl BatchModelBuffers {
             })
             .collect();
 
-        // Model-level params uniform
+        // Model-level params uniform (batch_size stored at slot [5])
         let params_data: [f32; 8] = [
             snapshot.config.alpha,
             snapshot.config.gamma,
             snapshot.config.convergence_threshold,
             snapshot.config.convergence_steps as f32,
             snapshot.config.weight_clip,
-            0.0,
+            batch_size as f32,
             0.0,
             0.0,
         ];
@@ -691,23 +680,19 @@ impl BatchModelBuffers {
             usage: BUF_USAGE,
         });
 
-        // Per-slot partial sum buffers
+        // Partial sum buffers (not used during batch convergence, but needed for bind groups)
         let total_slots = total_sums.max(1);
-        let mut error_sum = Vec::with_capacity(batch_size as usize);
-        let mut value_change_sum = Vec::with_capacity(batch_size as usize);
-        for slot in 0..batch_size {
-            let zeros = vec![0.0_f32; total_slots];
-            error_sum.push(ctx.device.create_buffer_init(&BufferInitDescriptor {
-                label: Some(&format!("batch_error_sum_s{slot}")),
-                contents: bytemuck::cast_slice(&zeros),
-                usage: BUF_USAGE,
-            }));
-            value_change_sum.push(ctx.device.create_buffer_init(&BufferInitDescriptor {
-                label: Some(&format!("batch_vc_sum_s{slot}")),
-                contents: bytemuck::cast_slice(&zeros),
-                usage: BUF_USAGE,
-            }));
-        }
+        let zeros = vec![0.0_f32; total_slots];
+        let error_sum = ctx.device.create_buffer_init(&BufferInitDescriptor {
+            label: Some("batch_error_sum"),
+            contents: bytemuck::cast_slice(&zeros),
+            usage: BUF_USAGE,
+        });
+        let value_change_sum = ctx.device.create_buffer_init(&BufferInitDescriptor {
+            label: Some("batch_vc_sum"),
+            contents: bytemuck::cast_slice(&zeros),
+            usage: BUF_USAGE,
+        });
 
         Self {
             layers,
