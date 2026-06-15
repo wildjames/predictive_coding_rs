@@ -10,6 +10,8 @@ pub struct GpuContext {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pub adapter_info: wgpu::AdapterInfo,
+    /// The adapter's hardware limits (as opposed to the device's requested limits).
+    pub adapter_limits: wgpu::Limits,
 }
 
 impl GpuContext {
@@ -33,6 +35,7 @@ impl GpuContext {
             })?;
 
         let adapter_info = adapter.get_info();
+        let adapter_limits = adapter.limits();
 
         let (device, queue): (wgpu::Device, wgpu::Queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
@@ -42,6 +45,7 @@ impl GpuContext {
                     // The timestep_weight bind group layout uses 10 storage buffers
                     // (plus 1 uniform), exceeding the default limit of 8.
                     max_storage_buffers_per_shader_stage: 10,
+                    // TODO: If models are ever in a place where they exceed the default limits, I'll need to handle it here. For now, my test models are like 10MB tops, so it's not an issue.
                     ..wgpu::Limits::default()
                 },
                 ..Default::default()
@@ -55,6 +59,7 @@ impl GpuContext {
             device,
             queue,
             adapter_info,
+            adapter_limits,
         }))
     }
 

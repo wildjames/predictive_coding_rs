@@ -1,9 +1,9 @@
 // ---------------------------------------------------------------------------
-// Predictive-coding compute shaders — predict & error kernels
+// Predictive-coding compute shaders - predict & error kernels
 //
 // Buffer layout (matches layout.rs PcBindGroupLayouts::predict_error):
 //   @group(0) @binding(0)  upper_values     : array<f32>  (read)
-//   @group(0) @binding(1)  upper_weights    : array<f32>  (read)   row-major (lower_size × upper_size)
+//   @group(0) @binding(1)  upper_weights    : array<f32>  (read)   row-major (lower_size * upper_size)
 //   @group(0) @binding(2)  upper_meta       : array<u32>  (read)   [pinned, activation_fn, size, weight_rows, weight_cols, is_top_level, error_sum_offset]
 //   @group(0) @binding(3)  lower_values     : array<f32>  (read)
 //   @group(0) @binding(4)  lower_preds      : array<f32>  (rw)
@@ -65,7 +65,9 @@ fn weight_index(row: u32, col: u32, num_cols: u32) -> u32 {
 ///
 /// pred_lower[i] = activation( sum_j W[i][j] * upper_values[j] )
 ///
-/// One thread per lower-layer node.
+/// One thread per lower-layer node. gid.y selects the batch slot.
+/// Per-slot buffers are stored as contiguous runs: slot k starts at k * layer_size.
+/// Weights are shared across all slots so no Y offset is applied to them.
 @compute @workgroup_size(64)
 fn compute_predictions(@builtin(global_invocation_id) gid: vec3<u32>) {
     let lower_size = lower_meta[2];
@@ -77,19 +79,23 @@ fn compute_predictions(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
+    let slot         = gid.y;
+    let upper_offset = slot * upper_size;
+    let lower_offset = slot * lower_size;
+
     var dot: f32 = 0.0;
     for (var j: u32 = 0u; j < upper_size; j = j + 1u) {
-        dot += upper_weights[weight_index(idx, j, upper_size)] * upper_values[j];
+        dot += upper_weights[weight_index(idx, j, upper_size)] * upper_values[upper_offset + j];
     }
 
-    lower_preds[idx] = activation(dot, act_fn);
+    lower_preds[lower_offset + idx] = activation(dot, act_fn);
 }
 
 /// Compute prediction errors for the lower layer.
 ///
 /// error[i] = value[i] - prediction[i]
 ///
-/// One thread per lower-layer node.
+/// One thread per lower-layer node. gid.y selects the batch slot.
 @compute @workgroup_size(64)
 fn compute_errors(@builtin(global_invocation_id) gid: vec3<u32>) {
     let lower_size = lower_meta[2];
@@ -99,7 +105,10 @@ fn compute_errors(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    lower_errors[idx] = lower_values[idx] - lower_preds[idx];
+    let slot         = gid.y;
+    let lower_offset = slot * lower_size;
+
+    lower_errors[lower_offset + idx] = lower_values[lower_offset + idx] - lower_preds[lower_offset + idx];
 }
 
 /// Gather the squared errors for this lower layer into partial sums.
@@ -108,6 +117,7 @@ fn compute_errors(@builtin(global_invocation_id) gid: vec3<u32>) {
 /// `partial_sums[offset + workgroup_id]`, where `offset` comes from
 /// `lower_meta[6]`.  This lets every layer write to its own region of the
 /// shared partial_sums buffer in a single dispatch.
+/// gid.y selects the batch slot (expected to be 0 for single-sample usage).
 @compute @workgroup_size(64)
 fn reduce_error_sq(
     @builtin(global_invocation_id) gid: vec3<u32>,
@@ -117,10 +127,12 @@ fn reduce_error_sq(
     let offset     = lower_meta[6]; // per-layer offset into partial_sums
     let idx        = gid.x;
     let local_idx  = lid.x;
+    let slot         = gid.y;
+    let lower_offset = slot * lower_size;
 
     // If I'm in bounds, get the value. If I'm out of bounds, treat as zero
     if idx < lower_size {
-        let e = lower_errors[idx];
+        let e = lower_errors[lower_offset + idx];
         shared_sum[local_idx] = e * e;
     } else {
         shared_sum[local_idx] = 0.0; // So I don't risk there being junk data in the array
@@ -148,6 +160,7 @@ fn reduce_error_sq(
 }
 
 /// Gather the raw (signed) errors for this lower layer into partial sums.
+/// gid.y selects the batch slot (expected to be 0 for single-sample usage).
 @compute @workgroup_size(64)
 fn reduce_error(
     @builtin(global_invocation_id) gid: vec3<u32>,
@@ -157,9 +170,11 @@ fn reduce_error(
     let offset     = lower_meta[6]; // per-layer offset into partial_sums
     let idx        = gid.x;
     let local_idx  = lid.x;
+    let slot         = gid.y;
+    let lower_offset = slot * lower_size;
 
     if idx < lower_size {
-        shared_sum[local_idx] = lower_errors[idx];
+        shared_sum[local_idx] = lower_errors[lower_offset + idx];
     } else {
         shared_sum[local_idx] = 0.0;
     }

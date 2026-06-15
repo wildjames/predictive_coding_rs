@@ -13,8 +13,6 @@ use super::{
 
 #[cfg(feature = "gpu")]
 use super::handlers::GpuBatchTrainHandler;
-#[cfg(feature = "gpu")]
-use crate::model::GpuModelRuntime;
 
 use std::sync::Arc;
 use tracing::info;
@@ -44,14 +42,13 @@ fn get_handler(
         ))),
         #[cfg(feature = "gpu")]
         TrainingStrategy::GpuSingleThread => {
-            let snapshot = model.to_snapshot();
-            let runtime = GpuModelRuntime::from_snapshot(&snapshot)?;
-            Ok(Box::new(SingleThreadTrainHandler::new(
+            Ok(Box::new(GpuBatchTrainHandler::new(
                 training_config,
-                runtime,
+                model,
                 data,
                 file_output_prefix,
-            )))
+                1,
+            )?))
         }
         #[cfg(feature = "gpu")]
         TrainingStrategy::GpuMiniBatch { batch_size } => Ok(Box::new(GpuBatchTrainHandler::new(

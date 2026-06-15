@@ -15,6 +15,11 @@ path = "src/train.rs"
 name = "eval"
 path = "src/evaluate.rs"
 
+[[bin]]
+name = "batch-size-advisor"
+path = "src/batch_size_advisor_cli.rs"
+required-features = ["gpu"]
+
 [features]
 default = []
 gpu = ["dep:wgpu", "dep:tokio", "dep:bytemuck"]
